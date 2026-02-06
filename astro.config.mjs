@@ -6,19 +6,36 @@ import starlight from '@astrojs/starlight';
 export default defineConfig({
 	integrations: [
 		starlight({
-			title: 'My Docs',
-			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/withastro/starlight' }],
+			title: 'MyLifeDB Docs',
+			social: [],
 			sidebar: [
 				{
-					label: 'Guides',
-					items: [
-						// Each item here is one entry in the navigation menu.
-						{ label: 'Example Guide', slug: 'guides/example' },
-					],
+					label: 'Architecture',
+					autogenerate: { directory: 'architecture' },
 				},
 				{
-					label: 'Reference',
-					autogenerate: { directory: 'reference' },
+					label: 'Components',
+					autogenerate: { directory: 'components' },
+				},
+				{
+					label: 'API',
+					autogenerate: { directory: 'api' },
+				},
+				{
+					label: 'Features',
+					autogenerate: { directory: 'features' },
+				},
+				{
+					label: 'Claude Code',
+					autogenerate: { directory: 'claude-code' },
+				},
+				{
+					label: 'Apple Client',
+					autogenerate: { directory: 'apple-client' },
+				},
+				{
+					label: 'Design',
+					autogenerate: { directory: 'design' },
 				},
 			],
 		}),
