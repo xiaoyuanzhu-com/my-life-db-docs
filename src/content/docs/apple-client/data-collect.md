@@ -254,6 +254,255 @@ Apple Device → App (collect) → REST API → MyLifeDB Server → Storage
 - No third-party services — your data stays on your server
 - Background refresh keeps data current (iOS Background Tasks, macOS background agent)
 
+---
+
+## Raw Export & Storage Design
+
+### Philosophy: Export Raw, Transform Later
+
+The app exports **raw HealthKit samples as-is**. No aggregation, no summarization, no transformation at export time. Consumers (AI, dashboards, scripts) can aggregate however they need later.
+
+This follows the life-db design principle: **"Imported data stays original."**
+
+### HealthKit Sample Structure
+
+Every HealthKit sample — regardless of type — shares the same core shape:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | string | HealthKit type identifier (e.g., `HKQuantityTypeIdentifierStepCount`) |
+| `start` | ISO 8601 | Sample start time |
+| `end` | ISO 8601 | Sample end time (same as start for point-in-time readings) |
+| `value` | number/null | Numeric value (null for workouts, category types use integer enums) |
+| `unit` | string/null | Unit of measurement (e.g., `count`, `count/min`, `kcal`, `m`) |
+| `source` | string | Bundle ID of the source app/device |
+| `device` | string/null | Device name (e.g., "iPhone 15 Pro", "Apple Watch Series 9") |
+| `metadata` | object/null | Extra fields — varies by type (time zone, workout details, etc.) |
+
+### Sample Types
+
+**Quantity samples** (most common) — have a numeric `value` and `unit`:
+```json
+{
+  "type": "HKQuantityTypeIdentifierStepCount",
+  "start": "2025-01-15T10:00:12Z",
+  "end": "2025-01-15T10:15:44Z",
+  "value": 250,
+  "unit": "count",
+  "source": "com.apple.health.9A1B2C",
+  "device": "iPhone 15 Pro"
+}
+```
+
+**Category samples** (sleep, standing, etc.) — `value` is an integer enum:
+```json
+{
+  "type": "HKCategoryTypeIdentifierSleepAnalysis",
+  "start": "2025-01-15T00:08:00Z",
+  "end": "2025-01-15T00:38:00Z",
+  "value": 4,
+  "unit": null,
+  "source": "com.apple.health.9A1B2C",
+  "device": "Apple Watch Series 9",
+  "metadata": { "HKTimeZone": "Asia/Singapore" }
+}
+```
+
+**Workout samples** — `value` is null, workout details in `metadata`:
+```json
+{
+  "type": "HKWorkoutTypeIdentifier",
+  "start": "2025-01-15T07:30:00Z",
+  "end": "2025-01-15T08:05:00Z",
+  "value": null,
+  "unit": null,
+  "source": "com.apple.health.9A1B2C",
+  "device": "Apple Watch Series 9",
+  "metadata": {
+    "workoutActivityType": 37,
+    "totalDistance": 5200,
+    "totalDistanceUnit": "m",
+    "totalEnergyBurned": 420,
+    "totalEnergyBurnedUnit": "kcal"
+  }
+}
+```
+
+### Storage Layout
+
+Files are organized by day under the life-db `imports/` folder:
+
+```
+imports/fitness/apple-health/
+├── raw/
+│   └── 2025/
+│       ├── 01/
+│       │   ├── 2025-01-15.json
+│       │   ├── 2025-01-16.json
+│       │   └── ...
+│       └── 02/
+│           ├── 2025-02-01.json
+│           └── ...
+├── types.json          # Reference: type IDs → human names, enum mappings
+└── README.md           # Documents format
+```
+
+**One JSON file per day.** Each file contains all raw samples for that calendar day.
+
+### Daily File Format
+
+```json
+{
+  "date": "2025-01-15",
+  "exported_at": "2025-01-16T00:05:00Z",
+  "device_info": {
+    "phone": "iPhone 15 Pro",
+    "watch": "Apple Watch Series 9",
+    "os_version": "iOS 18.2"
+  },
+  "samples": [
+    { "type": "HKQuantityTypeIdentifierStepCount", "start": "...", "end": "...", "value": 250, "unit": "count", ... },
+    { "type": "HKQuantityTypeIdentifierHeartRate", "start": "...", "end": "...", "value": 72, "unit": "count/min", ... },
+    { "type": "HKCategoryTypeIdentifierSleepAnalysis", "start": "...", "end": "...", "value": 4, "unit": null, ... },
+    ...
+  ]
+}
+```
+
+Samples are sorted by `start` time. All types are mixed together in a single chronological stream.
+
+### Types Reference File
+
+`types.json` is a static decoder ring — maps HealthKit identifiers and enums to human-readable names. It is **not** transformation, just documentation sitting next to the data.
+
+```json
+{
+  "quantity_types": {
+    "HKQuantityTypeIdentifierStepCount": { "name": "Steps", "unit": "count" },
+    "HKQuantityTypeIdentifierHeartRate": { "name": "Heart Rate", "unit": "count/min" },
+    "HKQuantityTypeIdentifierActiveEnergyBurned": { "name": "Active Calories", "unit": "kcal" },
+    "HKQuantityTypeIdentifierDistanceWalkingRunning": { "name": "Walking + Running Distance", "unit": "m" },
+    "HKQuantityTypeIdentifierFlightsClimbed": { "name": "Flights Climbed", "unit": "count" },
+    "HKQuantityTypeIdentifierHeartRateVariabilitySDNN": { "name": "Heart Rate Variability", "unit": "ms" },
+    "HKQuantityTypeIdentifierOxygenSaturation": { "name": "Blood Oxygen", "unit": "%" },
+    "HKQuantityTypeIdentifierRespiratoryRate": { "name": "Respiratory Rate", "unit": "count/min" },
+    "HKQuantityTypeIdentifierVO2Max": { "name": "VO2 Max", "unit": "ml/(kg*min)" },
+    "HKQuantityTypeIdentifierBodyMass": { "name": "Body Weight", "unit": "kg" },
+    "HKQuantityTypeIdentifierRestingHeartRate": { "name": "Resting Heart Rate", "unit": "count/min" },
+    "HKQuantityTypeIdentifierWalkingHeartRateAverage": { "name": "Walking Heart Rate Avg", "unit": "count/min" },
+    "HKQuantityTypeIdentifierAppleExerciseTime": { "name": "Exercise Minutes", "unit": "min" },
+    "HKQuantityTypeIdentifierBasalEnergyBurned": { "name": "Resting Energy", "unit": "kcal" }
+  },
+  "category_types": {
+    "HKCategoryTypeIdentifierSleepAnalysis": {
+      "name": "Sleep Analysis",
+      "values": {
+        "0": "inBed",
+        "1": "asleepUnspecified",
+        "2": "awake",
+        "3": "asleepCore",
+        "4": "asleepDeep",
+        "5": "asleepREM"
+      }
+    },
+    "HKCategoryTypeIdentifierAppleStandHour": {
+      "name": "Stand Hour",
+      "values": { "0": "idle", "1": "stood" }
+    },
+    "HKCategoryTypeIdentifierMindfulSession": {
+      "name": "Mindful Session",
+      "values": {}
+    }
+  },
+  "workout_activity_types": {
+    "37": "running",
+    "13": "cycling",
+    "46": "swimming",
+    "52": "walking",
+    "20": "functionalStrengthTraining",
+    "35": "yoga",
+    "63": "highIntensityIntervalTraining",
+    "3000": "other"
+  }
+}
+```
+
+### Size Estimates
+
+| Data | Samples/Day | Per Day | Per Year |
+|------|-------------|---------|----------|
+| Heart Rate | 500–2000 | bulk of file | — |
+| Steps | 100–200 intervals | small | — |
+| Sleep | 20–50 segments | small | — |
+| Workouts | 0–3 | small | — |
+| Others | 50–100 | small | — |
+| **Total** | **~700–2400** | **500KB–2MB** | **200–700MB** |
+
+### Collection Schedule
+
+The app collects data **daily** via iOS Background Tasks:
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  Daily (Background Task, ~midnight)                              │
+│                                                                  │
+│  1. Query HealthKit for all enabled types, yesterday's range     │
+│  2. Serialize raw samples to JSON                                │
+│  3. POST to backend: PUT /raw/imports/fitness/apple-health/      │
+│     raw/YYYY/MM/YYYY-MM-DD.json                                  │
+│  4. On success, record last-exported date locally                │
+│                                                                  │
+│  Catch-up: if missed days detected, backfill each missing day   │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+- **Delay**: ~1 day (yesterday's data exported after midnight)
+- **Catch-up**: If the app missed a day (device off, no background time), it detects gaps and backfills
+- **Idempotent**: Re-exporting the same day overwrites the file — safe to retry
+
+### HealthKit Query Pattern
+
+The app queries HealthKit **per type** — this is how Apple's API works (no "give me everything" call):
+
+```swift
+// Generic query — same pattern for every type
+func rawSamples(type: HKSampleType, date: Date) async throws -> [RawSample] {
+    let predicate = HKQuery.predicateForSamples(
+        withStart: date.startOfDay,
+        end: date.endOfDay
+    )
+    let descriptor = HKSampleQueryDescriptor(
+        predicates: [.sample(type: type, predicate: predicate)],
+        sortDescriptors: [SortDescriptor(\.startDate)]
+    )
+    let results = try await descriptor.result(for: healthStore)
+    return results.map { RawSample(from: $0) }
+}
+
+// Called for each enabled type, results merged into one daily file
+func exportDay(_ date: Date) async throws -> DailyExport {
+    let allSamples = try await withThrowingTaskGroup(of: [RawSample].self) { group in
+        for type in enabledTypes {
+            group.addTask { try await self.rawSamples(type: type, date: date) }
+        }
+        return try await group.reduce(into: []) { $0 += $1 }
+    }.sorted { $0.start < $1.start }
+
+    return DailyExport(date: date, exportedAt: .now, samples: allSamples)
+}
+```
+
+### Backend API (New)
+
+The app uses the existing `PUT /raw/*path` endpoint to write daily JSON files directly to the life-db filesystem. No new backend API needed.
+
+```
+PUT /raw/imports/fitness/apple-health/raw/2025/01/2025-01-15.json
+Content-Type: application/json
+
+{ "date": "2025-01-15", "exported_at": "...", "samples": [...] }
+```
+
 ## Privacy
 
 - All collection requires explicit opt-in per category
