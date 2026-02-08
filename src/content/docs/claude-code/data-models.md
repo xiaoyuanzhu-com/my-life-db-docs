@@ -343,7 +343,7 @@ This is returned **exactly as-is** from the API, even though the `SummarySession
 
 | Type | Subtypes |
 |------|----------|
-| `system` | `init`, `compact_boundary`, `microcompact_boundary`, `turn_duration`, `api_error`, `local_command`, `hook_started`, `status` |
+| `system` | `init`, `compact_boundary`, `microcompact_boundary`, `turn_duration`, `api_error`, `local_command`, `hook_started`, `status`, `task_notification` |
 | `progress` | `hook_progress`, `bash_progress`, `agent_progress`, `query_update`, `search_results_received` |
 | `result` | `success`, `error` |
 | `stream_event` | `message_start`, `content_block_start`, `content_block_delta`, `content_block_stop`, `message_delta`, `message_stop` |
@@ -1277,6 +1277,7 @@ System messages report internal events. The `subtype` field determines the speci
 | `hook_started` | Hook execution started | ✅ Yes |
 | `hook_response` | Hook execution completed with output | ✅ Yes |
 | `status` | Ephemeral session status indicator (e.g., "compacting") | ✅ Yes |
+| `task_notification` | Background task completed/failed notification | ✅ Yes |
 
 **5a. Init (Session Initialization)**
 
@@ -1603,6 +1604,35 @@ Status messages are transient indicators. The final state is communicated by oth
 3. Then `compact_boundary` shows the permanent "● Session compacted"
 
 In historical sessions, the last status is typically `null` (operation complete), so no transient indicator shows - only the `compact_boundary` is visible.
+
+**5h. Task Notification (Background Task Completion)**
+
+Task notification messages are sent when a background task (e.g., a background shell command launched via the Task tool with `run_in_background: true`) completes or fails. They provide a summary of the task outcome and a reference to the task output file.
+
+```json
+{
+  "output_file": "/tmp/claude-1000/-home-xiaoyuanzhu-my-life-db-data/tasks/bb53ba9.output",
+  "session_id": "d839de89-ea02-431a-ba44-67a6be1e80e1",
+  "status": "completed",
+  "subtype": "task_notification",
+  "summary": "Background command \"Monthly message distribution\" completed (exit code 0)",
+  "task_id": "bb53ba9",
+  "type": "system",
+  "uuid": "79feb111-74ea-4560-a7d6-6e48c3aae035"
+}
+```
+
+**Fields**:
+| Field | Type | Description |
+|-------|------|-------------|
+| `subtype` | string | Always `"task_notification"` |
+| `task_id` | string | Background task identifier (e.g., `"bb53ba9"`) |
+| `status` | string | Task outcome: `"completed"` or other status values |
+| `summary` | string | Human-readable description of the task outcome |
+| `output_file` | string | Path to the task's output file on disk |
+| `session_id` | string | Session UUID that spawned the background task |
+
+**Rendering:** Rendered as a single-line system message with a status-colored dot (green for completed, red for failed) and the `summary` text. Follows the same pattern as `turn_duration`.
 
 **6. Progress Messages**
 

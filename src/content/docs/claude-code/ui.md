@@ -1315,6 +1315,7 @@ These are top-level session events that are rendered as simple status indicators
 | `system.subtype: init` | System init block | Shows session initialization with tools, model, MCP servers |
 | `system.subtype: turn_duration` | "Turn completed in Xm Ys" | Turn duration telemetry showing how long a turn took |
 | `system.subtype: hook_started` | "Hook {status}: {hook_name}" + collapsible output | Hook execution (paired with hook_response via hookResponseMap) |
+| `system.subtype: task_notification` | Summary text with status dot | Background task completed/failed notification (e.g., background shell command finished) |
 | `user.isCompactSummary: true` | "Session continued" + collapsible summary | User message containing the compacted conversation summary |
 | `type: summary` | "Session summary" + summary text | Auto-generated session summary (created when session index is rebuilt) |
 
