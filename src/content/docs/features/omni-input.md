@@ -71,15 +71,14 @@ OmniInput has 4 distinct UI states with smooth transitions:
 
 ### State Transitions
 
-```
-Idle ─────[Click Mic]────→ Recording
-         ←───[Click Stop]───
-
-Idle ─────[Type/Add Files]────→ Content Present
-         ←───[Submit/Clear]────
-
-Any State ─────[Drag Enter]────→ Drag Active
-            ←───[Drop/Leave]────
+```mermaid
+stateDiagram-v2
+    Idle --> Recording : Click Mic
+    Recording --> Idle : Click Stop
+    Idle --> ContentPresent : Type/Add Files
+    ContentPresent --> Idle : Submit/Clear
+    [*] --> DragActive : Drag Enter (from any state)
+    DragActive --> [*] : Drop/Leave (return to previous state)
 ```
 
 ### Voice Input Flow
@@ -272,77 +271,30 @@ function OmniInput(props: OmniInputProps): JSX.Element;
 
 #### Example 1: Voice Recording
 
-```
-User clicks Mic button
-  ↓
-OmniInput calls voice.start()
-  ↓
-useVoiceInput:
-  - Requests microphone access
-  - Opens WebSocket to /api/asr/realtime
-  - Updates isRecording = true
-  ↓
-OmniInput re-renders with new voice state:
-  - Disables textarea
-  - Shows transcript overlay
-  - Renders: <AudioWaveform level={voice.audioLevel} />
-  - Renders: <RecordingTimer seconds={voice.duration} />
-  - Renders: Stop button
-  ↓
-useVoiceInput emits updates:
-  - audioLevel: 0 → 10 → 25 → 40...
-  - duration: 0 → 1 → 2 → 3...
-  - transcript.partial: "" → "Hello" → "Hello wo" → "Hello world"
-  - transcript.finalized: "" (then "Hello world" when sentence ends)
-  ↓
-OmniInput passes data to presentational components:
-  - AudioWaveform draws bars based on level
-  - RecordingTimer displays formatted time
-  - TranscriptOverlay shows finalized + partial text
-  ↓
-User clicks Stop
-  ↓
-OmniInput calls voice.stop()
-  ↓
-useVoiceInput:
-  - Sends stop message to WebSocket
-  - Receives final transcript
-  - Closes streams, sets isRecording = false
-  - Returns recordedAudio blob (if enabled)
-  ↓
-OmniInput coordination effects:
-  - Appends transcript to content state
-  - If recordedAudio exists, adds to files
-  - Re-enables textarea
+```mermaid
+flowchart TD
+    A["User clicks Mic button"] --> B["OmniInput calls voice.start()"]
+    B --> C["useVoiceInput:\n- Requests microphone access\n- Opens WebSocket to /api/asr/realtime\n- Updates isRecording = true"]
+    C --> D["OmniInput re-renders with new voice state:\n- Disables textarea\n- Shows transcript overlay\n- Renders AudioWaveform, RecordingTimer\n- Renders Stop button"]
+    D --> E["useVoiceInput emits updates:\n- audioLevel: 0 → 10 → 25 → 40...\n- duration: 0 → 1 → 2 → 3...\n- transcript.partial updates\n- transcript.finalized on sentence end"]
+    E --> F["OmniInput passes data to components:\n- AudioWaveform draws bars\n- RecordingTimer displays time\n- TranscriptOverlay shows text"]
+    F --> G["User clicks Stop"]
+    G --> H["OmniInput calls voice.stop()"]
+    H --> I["useVoiceInput:\n- Sends stop message to WebSocket\n- Receives final transcript\n- Closes streams, isRecording = false\n- Returns recordedAudio blob"]
+    I --> J["OmniInput coordination effects:\n- Appends transcript to content state\n- If recordedAudio exists, adds to files\n- Re-enables textarea"]
 ```
 
 #### Example 2: Search Coordination
 
-```
-User types "meeting notes"
-  ↓
-OmniInput updates content state
-  ↓
-useEffect triggers: search.search(content)
-  ↓
-useSearch:
-  - Clears previous debounce timer
-  - Sets new timer based on query length:
-    - 1 char: 1000ms delay
-    - 2 chars: 500ms delay
-    - 3+ chars: 100ms delay
-  ↓
-Timer expires, useSearch:
-  - Fires parallel keyword + semantic searches
-  - Updates isSearching = true
-  - Calls onResultsChange callback
-  ↓
-OmniInput receives search state update via prop
-  ↓
-Passes to SearchStatus component:
-  <SearchStatus {...searchStatus} />
-  ↓
-SearchStatus renders: "2 related files"
+```mermaid
+flowchart TD
+    A["User types 'meeting notes'"] --> B["OmniInput updates content state"]
+    B --> C["useEffect triggers: search.search(content)"]
+    C --> D["useSearch:\n- Clears previous debounce timer\n- Sets new timer based on query length\n  (1 char: 1000ms, 2 chars: 500ms, 3+: 100ms)"]
+    D --> E["Timer expires, useSearch:\n- Fires parallel keyword + semantic searches\n- Updates isSearching = true\n- Calls onResultsChange callback"]
+    E --> F["OmniInput receives search state update via prop"]
+    F --> G["Passes to SearchStatus component"]
+    G --> H["SearchStatus renders: '2 related files'"]
 ```
 
 ### Coordination Layer

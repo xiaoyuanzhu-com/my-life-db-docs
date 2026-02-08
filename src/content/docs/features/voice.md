@@ -334,18 +334,16 @@ const {
 **Architecture**: Vendor-agnostic proxy with message transformation
 
 **Flow**:
-```
-Client (Browser)
-    ↓ WebSocket (our schema: "start", "stop" + binary audio)
-Backend Proxy (Go)
-    ↓ Transform our schema → provider schema
-    ↓ WebSocket (Aliyun schema: "run-task", "finish-task" + binary audio)
-ASR Provider (Aliyun/OpenAI/etc)
-    ↓ WebSocket (provider schema: transcription results)
-Backend Proxy (Go)
-    ↓ Transform provider schema → our schema
-    ↓ WebSocket (our schema: "transcript", "done", "error")
-Client (Browser)
+```mermaid
+sequenceDiagram
+    participant Client as Client (Browser)
+    participant Proxy as Backend Proxy (Go)
+    participant ASR as ASR Provider (Aliyun/OpenAI/etc)
+
+    Client->>Proxy: WebSocket (our schema: "start", "stop" + binary audio)
+    Proxy->>ASR: Transform our schema → provider schema<br/>WebSocket (Aliyun schema: "run-task", "finish-task" + binary audio)
+    ASR->>Proxy: WebSocket (provider schema: transcription results)
+    Proxy->>Client: Transform provider schema → our schema<br/>WebSocket (our schema: "transcript", "done", "error")
 ```
 
 **Benefits of Abstraction**:
@@ -496,14 +494,11 @@ wg.Wait()
 #### Phase 2 Architecture (To Implement)
 
 **Processing Chain**:
-```
-ASR Engine (Aliyun)
-    ↓
-Raw Transcript State
-    ↓ (debounced 3s, regex-based)
-Cleaned Transcript State
-    ↓ (debounced 30s, LLM-based, lazy)
-Summary State
+```mermaid
+flowchart TD
+    A["ASR Engine (Aliyun)"] --> B["Raw Transcript State"]
+    B -->|"debounced 3s, regex-based"| C["Cleaned Transcript State"]
+    C -->|"debounced 30s, LLM-based, lazy"| D["Summary State"]
 ```
 
 **Debouncing Strategy**:

@@ -22,55 +22,34 @@ Key differentiator: It's truly Unix-style and composable (`tail -f app.log | cla
 
 Claude Code uses a **session-centric architecture**:
 
-```
-┌─────────────────────────────────────────────────┐
-│           Claude Code Session                   │
-│                                                 │
-│  ┌──────────────────────────────────────────┐  │
-│  │  Conversation History & Context           │  │
-│  └──────────────────────────────────────────┘  │
-│                        ▲                        │
-│                        │                        │
-│  ┌────────────────────────────────────────┐   │
-│  │  Tool System                           │   │
-│  │  ├─ Read (files)                       │   │
-│  │  ├─ Write (files)                      │   │
-│  │  ├─ Edit (targeted changes)            │   │
-│  │  ├─ Bash (shell commands)              │   │
-│  │  ├─ Glob/Grep (file search)            │   │
-│  │  ├─ WebFetch/WebSearch                 │   │
-│  │  ├─ Task (spawn subagents)             │   │
-│  │  └─ Skill (invoke custom commands)     │   │
-│  └────────────────────────────────────────┘   │
-│                                                 │
-│  ┌────────────────────────────────────────┐   │
-│  │  Permission System                     │   │
-│  │  ├─ allow (permit)                     │   │
-│  │  ├─ ask (prompt user)                  │   │
-│  │  └─ deny (block)                       │   │
-│  └────────────────────────────────────────┘   │
-│                                                 │
-│  ┌────────────────────────────────────────┐   │
-│  │  Subagents & Skills                    │   │
-│  │  ├─ Explore (fast, read-only)          │   │
-│  │  ├─ Plan (research before coding)      │   │
-│  │  ├─ General-purpose (complex tasks)    │   │
-│  │  └─ Custom agents (project-specific)   │   │
-│  └────────────────────────────────────────┘   │
-│                                                 │
-│  ┌────────────────────────────────────────┐   │
-│  │  MCP Servers (External Tools)          │   │
-│  │  ├─ GitHub, Sentry, Figma, Slack...    │   │
-│  │  └─ Custom integrations                │   │
-│  └────────────────────────────────────────┘   │
-│                                                 │
-│  ┌────────────────────────────────────────┐   │
-│  │  Hooks (Event Handlers)                │   │
-│  │  ├─ PreToolUse  (before tool runs)     │   │
-│  │  ├─ PostToolUse (after tool runs)      │   │
-│  │  └─ Other lifecycle events             │   │
-│  └────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────┘
+```mermaid
+block-beta
+    columns 1
+    block:session["Claude Code Session"]
+        columns 1
+        A["Conversation History & Context"]
+        block:tools["Tool System"]
+            columns 4
+            T1["Read (files)"] T2["Write (files)"] T3["Edit (targeted changes)"] T4["Bash (shell commands)"]
+            T5["Glob/Grep (file search)"] T6["WebFetch/WebSearch"] T7["Task (spawn subagents)"] T8["Skill (invoke custom commands)"]
+        end
+        block:perms["Permission System"]
+            columns 3
+            P1["allow (permit)"] P2["ask (prompt user)"] P3["deny (block)"]
+        end
+        block:agents["Subagents & Skills"]
+            columns 4
+            S1["Explore (fast, read-only)"] S2["Plan (research before coding)"] S3["General-purpose (complex tasks)"] S4["Custom agents (project-specific)"]
+        end
+        block:mcp["MCP Servers (External Tools)"]
+            columns 2
+            M1["GitHub, Sentry, Figma, Slack..."] M2["Custom integrations"]
+        end
+        block:hooks["Hooks (Event Handlers)"]
+            columns 3
+            H1["PreToolUse (before tool runs)"] H2["PostToolUse (after tool runs)"] H3["Other lifecycle events"]
+        end
+    end
 ```
 
 **Sessions are:** Local, persistent, resumable conversations stored on your machine with full message history and tool usage tracking.
@@ -83,12 +62,10 @@ The VSCode extension and Claude Agent SDK communicate with the CLI via **structu
 
 ### How It Works
 
-```
-┌─────────────────────┐         stdin (JSON)         ┌─────────────────────┐
-│  VSCode Extension   │  ─────────────────────────▶  │                     │
-│        or           │                              │   Claude Code CLI   │
-│   Claude Agent SDK  │  ◀─────────────────────────  │                     │
-└─────────────────────┘        stdout (JSON)         └─────────────────────┘
+```mermaid
+flowchart LR
+    A["VSCode Extension\nor\nClaude Agent SDK"] -- "stdin (JSON)" --> B["Claude Code CLI"]
+    B -- "stdout (JSON)" --> A
 ```
 
 **1. Spawn CLI with JSON flags:**
@@ -173,24 +150,17 @@ Higher scopes override lower scopes.
 
 ### Session Lifecycle
 
-```
-Start Session
-    ↓
-Load Configuration (CLAUDE.md, settings.json, MCP servers)
-    ↓
-Initialize Context Window
-    ↓
-Display Welcome Screen
-    ↓
-Await User Prompt
-    ↓
-Process Input → Run Tools → Update Context
-    ↓
-Display Output
-    ↓
-Continue or Exit
-    ↓
-Save Session Automatically
+```mermaid
+flowchart TD
+    A[Start Session] --> B[Load Configuration\nCLAUDE.md, settings.json, MCP servers]
+    B --> C[Initialize Context Window]
+    C --> D[Display Welcome Screen]
+    D --> E[Await User Prompt]
+    E --> F[Process Input / Run Tools / Update Context]
+    F --> G[Display Output]
+    G --> H{Continue or Exit?}
+    H -- Continue --> E
+    H -- Exit --> I[Save Session Automatically]
 ```
 
 ### Key Session Features
@@ -272,14 +242,15 @@ Claude Code provides 14+ built-in tools:
 
 Three decision modes:
 
-```
-PERMISSION REQUEST
-├─ User decides YES: Tool executes
-├─ User decides NO: Tool blocked
-└─ Auto-approval modes:
-   ├─ Accept All: Auto-yes to everything
-   ├─ Plan Mode: Auto-no (read-only)
-   └─ Bypass: Skip all checks (dangerous)
+```mermaid
+flowchart TD
+    A[Permission Request] --> B{User Decision}
+    B -- YES --> C[Tool Executes]
+    B -- NO --> D[Tool Blocked]
+    A --> E{Auto-approval Mode}
+    E -- Accept All --> F[Auto-yes to everything]
+    E -- Plan Mode --> G[Auto-no / read-only]
+    E -- Bypass --> H[Skip all checks / dangerous]
 ```
 
 **Permission Rules** use pattern matching:
@@ -403,20 +374,20 @@ This matches the official Claude Agent SDK pattern for tools requiring user inte
 
 **Message Flow (SDK Mode):**
 
-```
-assistant: tool_use AskUserQuestion
-    │
-    ▼ (CanUseTool callback)
-control_request (tool_name="AskUserQuestion") → Frontend shows question UI
-    │
-    ▼ (User answers)
-control_response (with updated_input) → Backend receives answers
-    │
-    ▼ (Callback returns Allow with UpdatedInput)
-user: tool_result (contains user's answers)
-    │
-    ▼
-assistant: continues with knowledge of user's selection
+```mermaid
+sequenceDiagram
+    participant Claude as Claude (Assistant)
+    participant SDK as Go SDK / Backend
+    participant UI as Frontend
+
+    Claude->>SDK: tool_use AskUserQuestion
+    SDK->>SDK: CanUseTool callback
+    SDK->>UI: control_request (tool_name="AskUserQuestion")
+    UI->>UI: Shows question UI
+    UI->>SDK: control_response (with updated_input)
+    SDK->>SDK: Callback returns Allow with UpdatedInput
+    SDK->>Claude: tool_result (contains user's answers)
+    Claude->>Claude: Continues with knowledge of user's selection
 ```
 
 **Answer Format:**
@@ -491,16 +462,12 @@ You are a senior code reviewer. When invoked:
 
 ### Subagent Scopes (Priority)
 
-```
-CLI flags (--agents)      ← Highest priority
-  ↓
-Project agents (.claude/agents/)
-  ↓
-User agents (~/.claude/agents/)
-  ↓
-Plugin agents
-  ↓
-Built-in agents (Explore, Plan, etc.)  ← Lowest priority
+```mermaid
+flowchart TD
+    A["CLI flags (--agents)\n**Highest priority**"] --> B["Project agents\n(.claude/agents/)"]
+    B --> C["User agents\n(~/.claude/agents/)"]
+    C --> D["Plugin agents"]
+    D --> E["Built-in agents (Explore, Plan, etc.)\n**Lowest priority**"]
 ```
 
 ### How Claude Decides to Use Subagents
@@ -561,12 +528,10 @@ When explaining code, always:
 
 Claude loads context from multiple locations:
 
-```
-~/.claude/CLAUDE.md           (User-level instructions)
-  ↓
-.claude/CLAUDE.md or CLAUDE.md (Project-level instructions)
-  ↓
-.claude/CLAUDE.local.md       (Your personal project overrides)
+```mermaid
+flowchart TD
+    A["~/.claude/CLAUDE.md\n(User-level instructions)"] --> B[".claude/CLAUDE.md or CLAUDE.md\n(Project-level instructions)"]
+    B --> C[".claude/CLAUDE.local.md\n(Your personal project overrides)"]
 ```
 
 **Precedence**: Local > Project > User
@@ -596,17 +561,14 @@ MCP extends Claude Code with external tools and data sources.
 
 ### How MCP Works
 
-```
-Claude Code
-    ↓
-MCP Tool Request
-    ↓
-MCP Server
-    ├─ HTTP/SSE/Stdio Transport
-    ├─ Execute Tool
-    └─ Return Result
-    ↓
-Claude Code (continues conversation)
+```mermaid
+flowchart TD
+    A[Claude Code] --> B[MCP Tool Request]
+    B --> C[MCP Server]
+    C --> D[HTTP/SSE/Stdio Transport]
+    C --> E[Execute Tool]
+    C --> F[Return Result]
+    F --> G[Claude Code\ncontinues conversation]
 ```
 
 ### Installing MCP Servers

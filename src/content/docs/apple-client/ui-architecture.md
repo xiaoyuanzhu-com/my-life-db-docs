@@ -33,58 +33,46 @@ The MyLifeDB Apple client uses a **hybrid architecture** that combines a native 
 
 ## Architecture Diagram
 
-```
-+-------------------------------------------------------------+
-|                    MyLifeDB iOS/macOS App                      |
-+-------------------------------------------------------------+
-|                                                                |
-|   +--------------------------------------------------------+  |
-|   |              Native SwiftUI Shell                       |  |
-|   |                                                         |  |
-|   |   +---------+  +---------+  +---------+  +---------+   |  |
-|   |   |  Inbox  |  | Library |  | Search  |  |Settings |   |  |
-|   |   |   Tab   |  |   Tab   |  |   Tab   |  |   Tab   |   |  |
-|   |   +----+----+  +----+----+  +----+----+  +----+----+   |  |
-|   +--------+------------+----------+-----------+------------+  |
-|            |            |          |            |              |
-|   +--------v------------v----------v------------v----------+  |
-|   |                                                         |  |
-|   |                    WKWebView                            |  |
-|   |            (Embedded Web Frontend)                      |  |
-|   |                                                         |  |
-|   |   . Document viewing (Markdown, code, Mermaid)          |  |
-|   |   . Library browsing & file tree                        |  |
-|   |   . Inbox list & item details                           |  |
-|   |   . Search results                                      |  |
-|   |   . Rich content editing                                |  |
-|   |                                                         |  |
-|   +--------------------------------------------------------+  |
-|                              |                                 |
-|                    JavaScript Bridge                           |
-|              (WKScriptMessageHandler)                          |
-|                              |                                 |
-|   +--------------------------------------------------------+  |
-|   |              Native Components                          |  |
-|   |                                                         |  |
-|   |   . Navigation chrome (tab bar, toolbar)                |  |
-|   |   . Share extension                                     |  |
-|   |   . Widgets (home screen)                               |  |
-|   |   . Spotlight search integration                        |  |
-|   |   . Push notifications                                  |  |
-|   |   . Quick capture (floating button, shortcuts)          |  |
-|   |   . Offline status indicator                            |  |
-|   |   . Authentication (ASWebAuthenticationSession)         |  |
-|   |                                                         |  |
-|   +--------------------------------------------------------+  |
-|                                                                |
-+-------------------------------------------------------------+
-                              |
-                              v
-              +-----------------------------+
-              |   MyLifeDB Backend (Go)     |
-              |   REST API + SSE            |
-              |   Port 12345                |
-              +-----------------------------+
+```mermaid
+graph TB
+    subgraph App["MyLifeDB iOS/macOS App"]
+        subgraph Shell["Native SwiftUI Shell"]
+            Inbox["Inbox Tab"]
+            Library["Library Tab"]
+            Search["Search Tab"]
+            Settings["Settings Tab"]
+        end
+
+        subgraph WebView["WKWebView (Embedded Web Frontend)"]
+            WV1["Document viewing (Markdown, code, Mermaid)"]
+            WV2["Library browsing & file tree"]
+            WV3["Inbox list & item details"]
+            WV4["Search results"]
+            WV5["Rich content editing"]
+        end
+
+        Bridge["JavaScript Bridge\n(WKScriptMessageHandler)"]
+
+        subgraph Native["Native Components"]
+            NC1["Navigation chrome (tab bar, toolbar)"]
+            NC2["Share extension"]
+            NC3["Widgets (home screen)"]
+            NC4["Spotlight search integration"]
+            NC5["Push notifications"]
+            NC6["Quick capture (floating button, shortcuts)"]
+            NC7["Offline status indicator"]
+            NC8["Authentication (ASWebAuthenticationSession)"]
+        end
+
+        Inbox --> WebView
+        Library --> WebView
+        Search --> WebView
+        Settings --> WebView
+        WebView --> Bridge
+        Bridge --> Native
+    end
+
+    App --> Backend["MyLifeDB Backend (Go)\nREST API + SSE\nPort 12345"]
 ```
 
 ---
@@ -123,20 +111,28 @@ The WebView renders all content-heavy screens using the existing web frontend.
 
 Communication layer between native Swift and web JavaScript.
 
-```
-Native -> Web:
-  . Navigation commands (showDocument, navigateTo)
-  . Theme changes (dark/light mode sync)
-  . Authentication state
-  . Platform info (safe areas, device type)
+```mermaid
+flowchart LR
+    subgraph NtoW["Native → Web"]
+        direction TB
+        N1["Navigation commands\n(showDocument, navigateTo)"]
+        N2["Theme changes\n(dark/light mode sync)"]
+        N3["Authentication state"]
+        N4["Platform info\n(safe areas, device type)"]
+    end
 
-Web -> Native:
-  . Share content
-  . Open external URLs
-  . Haptic feedback
-  . Show native alerts/sheets
-  . Copy to clipboard
-  . Request native features (camera, files)
+    subgraph WtoN["Web → Native"]
+        direction TB
+        W1["Share content"]
+        W2["Open external URLs"]
+        W3["Haptic feedback"]
+        W4["Show native alerts/sheets"]
+        W5["Copy to clipboard"]
+        W6["Request native features\n(camera, files)"]
+    end
+
+    Native["Native Swift"] --> NtoW --> Web["Web JavaScript"]
+    Web --> WtoN --> Native
 ```
 
 ---

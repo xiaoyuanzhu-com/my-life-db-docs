@@ -244,8 +244,9 @@ Data from HealthKit (requires user permission).
 
 Data flows from device to MyLifeDB backend:
 
-```
-Apple Device → App (collect) → REST API → MyLifeDB Server → Storage
+```mermaid
+flowchart LR
+    A["Apple Device"] --> B["App (collect)"] --> C["REST API"] --> D["MyLifeDB Server"] --> E["Storage"]
 ```
 
 - Each data source has an independent toggle in Settings > Data Collect
@@ -442,18 +443,16 @@ Samples are sorted by `start` time. All types are mixed together in a single chr
 
 The app collects data **daily** via iOS Background Tasks:
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│  Daily (Background Task, ~midnight)                              │
-│                                                                  │
-│  1. Query HealthKit for all enabled types, yesterday's range     │
-│  2. Serialize raw samples to JSON                                │
-│  3. POST to backend: PUT /raw/imports/fitness/apple-health/      │
-│     raw/YYYY/MM/YYYY-MM-DD.json                                  │
-│  4. On success, record last-exported date locally                │
-│                                                                  │
-│  Catch-up: if missed days detected, backfill each missing day   │
-└──────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    Start["Daily Background Task (~midnight)"] --> Step1["1. Query HealthKit for all enabled types,\nyesterday's range"]
+    Step1 --> Step2["2. Serialize raw samples to JSON"]
+    Step2 --> Step3["3. PUT /raw/imports/fitness/apple-health/\nraw/YYYY/MM/YYYY-MM-DD.json"]
+    Step3 --> Step4["4. On success, record last-exported date locally"]
+    Step4 --> Check{"Missed days\ndetected?"}
+    Check -- Yes --> Backfill["Backfill each missing day"]
+    Backfill --> Step1
+    Check -- No --> Done["Done"]
 ```
 
 - **Delay**: ~1 day (yesterday's data exported after midnight)

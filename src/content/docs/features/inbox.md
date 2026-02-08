@@ -21,10 +21,11 @@ The inbox has four mutually exclusive interaction modes:
 
 Modes are exclusive - only one can be active at a time:
 
-```
-Default ←→ Search
-    ↕         ↕
-Selection   Modal
+```mermaid
+graph LR
+    Default <--> Search
+    Default <--> Selection
+    Search <--> Modal
 ```
 
 - **Search** and **Default** toggle based on input/results
@@ -322,12 +323,12 @@ interface PinnedItem {
 
 ## Component Hierarchy
 
-```
-InboxPage (routes/inbox.tsx)
-└── InboxFeed (components/inbox-feed.tsx)
-    ├── Page containers
-    │   └── FileCard (for each item)
-    └── Gap spacers (for unloaded pages)
+```mermaid
+graph TD
+    InboxPage["InboxPage (routes/inbox.tsx)"] --> InboxFeed["InboxFeed (components/inbox-feed.tsx)"]
+    InboxFeed --> PageContainers["Page containers"]
+    InboxFeed --> GapSpacers["Gap spacers (for unloaded pages)"]
+    PageContainers --> FileCard["FileCard (for each item)"]
 ```
 
 The `InboxFeed` component is also used on the home page with the same behavior.
@@ -424,51 +425,15 @@ The inbox automatically updates when files change on disk, including changes fro
 
 ### Architecture Overview
 
-```
-Filesystem Change (local or synced)
-         │
-         ▼
-┌─────────────────────────────────────┐
-│  FileSystemWatcher (chokidar)       │
-│  - awaitWriteFinish: 500ms          │
-│  - Per-path event queue             │
-└─────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────┐
-│  processPath()                      │
-│  - Check filesystem state           │
-│  - Upsert/delete DB record          │
-│  - Emit inbox-changed notification  │
-└─────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────┐
-│  NotificationService (EventEmitter) │
-│  - Broadcasts to all SSE clients    │
-└─────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────┐
-│  SSE: /api/notifications/stream     │
-│  - Push to browser                  │
-│  - 30s heartbeat                    │
-└─────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────┐
-│  useInboxNotifications hook         │
-│  - 200ms debounce                   │
-│  - Triggers refresh                 │
-└─────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────┐
-│  InboxFeed.loadNewestPage()         │
-│  - Ref-based loading guard          │
-│  - Pending refresh queue            │
-│  - Clears optimistic state          │
-└─────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A["Filesystem Change (local or synced)"] --> B
+    B["FileSystemWatcher (chokidar)\n- awaitWriteFinish: 500ms\n- Per-path event queue"] --> C
+    C["processPath()\n- Check filesystem state\n- Upsert/delete DB record\n- Emit inbox-changed notification"] --> D
+    D["NotificationService (EventEmitter)\n- Broadcasts to all SSE clients"] --> E
+    E["SSE: /api/notifications/stream\n- Push to browser\n- 30s heartbeat"] --> F
+    F["useInboxNotifications hook\n- 200ms debounce\n- Triggers refresh"] --> G
+    G["InboxFeed.loadNewestPage()\n- Ref-based loading guard\n- Pending refresh queue\n- Clears optimistic state"]
 ```
 
 ### Design Principles

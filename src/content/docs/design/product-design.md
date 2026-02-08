@@ -70,8 +70,9 @@ MyLifeDB implements a **dual-zone architecture** that separates capture from org
 
 The system transforms raw information into structured knowledge through this natural progression:
 
-```
-Raw Input → AI Enrichment → User Reflection → Pattern Detection → Space Creation → Principle Formation
+```mermaid
+flowchart LR
+    A[Raw Input] --> B[AI Enrichment] --> C[User Reflection] --> D[Pattern Detection] --> E[Space Creation] --> F[Principle Formation]
 ```
 
 **Key Insight:** Users don't organize upfront. The system observes patterns and suggests structure, which users confirm or reject.
@@ -801,20 +802,14 @@ CREATE TABLE indexed_files (
 
 **User Journey:**
 
-```
-1. User adds URL
-   ↓
-2. Saved to inbox: inbox/{uuid}/
-   ↓
-3. Background: Crawl URL, extract content, take screenshot
-   ↓
-4. Rename: {uuid}/ → {ai-short-summary}/ (e.g., "understanding-react-hooks")
-   ↓
-5. User manually settles: Copy folder to library root
-   ↓
-6. User organizes: Move/edit in library as preferred
-   ↓
-7. mylifedb re-indexes: Detects changes via fs.watch()
+```mermaid
+flowchart TD
+    A["1. User adds URL"] --> B["2. Saved to inbox: inbox/{uuid}/"]
+    B --> C["3. Background: Crawl URL,\nextract content, take screenshot"]
+    C --> D["4. Rename: {uuid}/ --> {ai-short-summary}/\n(e.g., 'understanding-react-hooks')"]
+    D --> E["5. User manually settles:\nCopy folder to library root"]
+    E --> F["6. User organizes:\nMove/edit in library as preferred"]
+    F --> G["7. mylifedb re-indexes:\nDetects changes via fs.watch()"]
 ```
 
 **Settlement Approach: "Deadly Simple Export"**

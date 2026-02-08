@@ -290,37 +290,37 @@ func (h *Handlers) HandleInboxCreate(c *gin.Context) {
 
 ### File Upload Flow
 
-```
-Client
-  ↓ POST /api/inbox
-Handler.HandleInboxCreate()
-  ↓ server.FS()
-FS.Service.WriteFile()
-  ↓ uses db.DB
-  ↓ notifies via handler
-Digest.Worker.OnFileChange()
-  ↓ uses db.DB
-  ↓ uses notifications.Service
-Notifications.Service.Notify()
-  ↓ SSE
-Client receives update
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Handler as Handler.HandleInboxCreate()
+    participant FS as FS.Service
+    participant DB as db.DB
+    participant Digest as Digest.Worker
+    participant Notif as Notifications.Service
+
+    Client->>Handler: POST /api/inbox
+    Handler->>FS: server.FS().WriteFile()
+    FS->>DB: uses db.DB
+    FS->>Handler: notifies via handler
+    Handler->>Digest: OnFileChange()
+    Digest->>DB: uses db.DB
+    Digest->>Notif: uses notifications.Service
+    Notif->>Client: SSE update
 ```
 
 ### Module Creation Flow
 
-```
-main()
-  ↓ load config
-server.New(config)
-  ↓ creates in order:
-  1. db.Open(dbConfig)
-  2. notifications.NewService()
-  3. fs.NewService(fsConfig + db)
-  4. digest.NewWorker(digestConfig + db + notif)
-  5. wire connections
-  6. setup router
-  ↓ returns
-server.Start()
+```mermaid
+flowchart TD
+    A["main()"] -->|load config| B["server.New(config)"]
+    B -->|"creates in order"| C["1. db.Open(dbConfig)"]
+    C --> D["2. notifications.NewService()"]
+    D --> E["3. fs.NewService(fsConfig + db)"]
+    E --> F["4. digest.NewWorker(digestConfig + db + notif)"]
+    F --> G["5. Wire connections"]
+    G --> H["6. Setup router"]
+    H -->|returns| I["server.Start()"]
 ```
 
 ## Migration Checklist

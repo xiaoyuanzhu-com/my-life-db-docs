@@ -10,40 +10,24 @@ This document clearly defines all components of the inbox agent system: system p
 
 The agent system has these key components:
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         AGENT SYSTEM                            │
-│                                                                 │
-│  ┌───────────────────────────────────────────────────────────┐ │
-│  │                    System Prompt                          │ │
-│  │  (Defines agent personality, role, and guidelines)        │ │
-│  └───────────────────────────────────────────────────────────┘ │
-│                              │                                  │
-│                              ▼                                  │
-│  ┌───────────────────────────────────────────────────────────┐ │
-│  │                  Agent (LLM)                              │ │
-│  │           (Claude 3.5 Sonnet / GPT-4o)                    │ │
-│  └───────────────────────────────────────────────────────────┘ │
-│                              │                                  │
-│                              ▼                                  │
-│  ┌────────────────────┬──────────────────┬──────────────────┐  │
-│  │                    │                  │                  │  │
-│  │  Built-in Tools    │  App Tools       │  User Tools      │  │
-│  │  (Standard)        │  (App-specific)  │  (Customizable)  │  │
-│  │                    │                  │                  │  │
-│  │  • search          │  • get_file      │  (future)        │  │
-│  │  • list_files      │  • get_folder... │                  │  │
-│  │                    │  • read_guide... │                  │  │
-│  │                    │  • move_file     │                  │  │
-│  │                    │  • suggest...    │                  │  │
-│  └────────────────────┴──────────────────┴──────────────────┘  │
-│                              │                                  │
-│                              ▼                                  │
-│  ┌───────────────────────────────────────────────────────────┐ │
-│  │                    AppClient                              │ │
-│  │  (Interface to app's capabilities)                        │ │
-│  └───────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph AGENT_SYSTEM["AGENT SYSTEM"]
+        SP["System Prompt<br/><i>Defines agent personality, role, and guidelines</i>"]
+        LLM["Agent (LLM)<br/><i>Claude 3.5 Sonnet / GPT-4o</i>"]
+        SP --> LLM
+
+        subgraph TOOLS["Tools"]
+            BT["Built-in Tools (Standard)<br/>- search<br/>- list_files"]
+            AT["App Tools (App-specific)<br/>- get_file<br/>- get_folder_tree<br/>- read_guideline<br/>- move_file<br/>- suggest"]
+            UT["User Tools (Customizable)<br/><i>(future)</i>"]
+        end
+
+        LLM --> TOOLS
+
+        AC["AppClient<br/><i>Interface to app's capabilities</i>"]
+        TOOLS --> AC
+    end
 ```
 
 ---
@@ -54,31 +38,17 @@ The system prompt is the **foundation** that defines who the agent is and how it
 
 ### Structure
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      SYSTEM PROMPT                          │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  1. ROLE DEFINITION                                         │
-│     "You are a helpful personal assistant for MyLifeDB..."  │
-│                                                             │
-│  2. CAPABILITIES                                            │
-│     What the agent can do (search, organize, understand)    │
-│                                                             │
-│  3. USER'S CONTEXT                                          │
-│     {guideline_content} - User's organization patterns      │
-│     {recent_inbox_files} - Current context                  │
-│                                                             │
-│  4. TOOL DESCRIPTIONS                                       │
-│     List of available tools with usage notes                │
-│                                                             │
-│  5. BEHAVIORAL GUIDELINES                                   │
-│     When to search, when to organize, confidence levels     │
-│                                                             │
-│  6. CONVERSATION STYLE                                      │
-│     Tone, how to explain reasoning, when to ask questions   │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph SYSTEM_PROMPT["SYSTEM PROMPT"]
+        S1["1. ROLE DEFINITION<br/><i>You are a helpful personal assistant for MyLifeDB...</i>"]
+        S2["2. CAPABILITIES<br/><i>What the agent can do (search, organize, understand)</i>"]
+        S3["3. USER'S CONTEXT<br/><i>{guideline_content} - User's organization patterns</i><br/><i>{recent_inbox_files} - Current context</i>"]
+        S4["4. TOOL DESCRIPTIONS<br/><i>List of available tools with usage notes</i>"]
+        S5["5. BEHAVIORAL GUIDELINES<br/><i>When to search, when to organize, confidence levels</i>"]
+        S6["6. CONVERSATION STYLE<br/><i>Tone, how to explain reasoning, when to ask questions</i>"]
+        S1 --> S2 --> S3 --> S4 --> S5 --> S6
+    end
 ```
 
 ### Full System Prompt Template
@@ -662,41 +632,15 @@ Tools are organized into logical categories:
 
 ## 6. Tool Execution Flow
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    TOOL EXECUTION FLOW                          │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  1. Agent decides to use tool                                   │
-│     "I need to search for the user's ID photo"                  │
-│                                                                 │
-│  2. Agent outputs tool_use block                                │
-│     {                                                           │
-│       "name": "search",                                         │
-│       "input": {                                                │
-│         "query": "ID license passport photo",                   │
-│         "type": "image/"                                        │
-│       }                                                         │
-│     }                                                           │
-│                                                                 │
-│  3. Tool executor parses and validates                          │
-│     - Check tool exists                                         │
-│     - Validate required parameters                              │
-│     - Type check inputs                                         │
-│                                                                 │
-│  4. Tool executor calls AppClient method                        │
-│     result = a.app.Search(ctx, SearchRequest{...})             │
-│                                                                 │
-│  5. Result returned to agent                                    │
-│     [                                                           │
-│       {path: "life/gov docs/ID.jpg", score: 0.95},             │
-│       {path: "life/gov docs/license.png", score: 0.89}         │
-│     ]                                                           │
-│                                                                 │
-│  6. Agent continues with result                                 │
-│     "I found 3 photos that might be your ID..."                 │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    S1["1. Agent decides to use tool<br/><i>I need to search for the user's ID photo</i>"]
+    S2["2. Agent outputs tool_use block<br/><code>name: search, input: {query: ID license passport photo, type: image/}</code>"]
+    S3["3. Tool executor parses and validates<br/>- Check tool exists<br/>- Validate required parameters<br/>- Type check inputs"]
+    S4["4. Tool executor calls AppClient method<br/><code>result = a.app.Search(ctx, SearchRequest{...})</code>"]
+    S5["5. Result returned to agent<br/><i>{path: life/gov docs/ID.jpg, score: 0.95}, ...</i>"]
+    S6["6. Agent continues with result<br/><i>I found 3 photos that might be your ID...</i>"]
+    S1 --> S2 --> S3 --> S4 --> S5 --> S6
 ```
 
 ---

@@ -12,19 +12,16 @@ backend/claude/sdk/
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    ClaudeSDKClient                          │
-│  High-level bidirectional client                            │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │                      Query                           │   │
-│  │  Control protocol handler                            │   │
-│  │  ┌─────────────────────────────────────────────┐    │   │
-│  │  │        SubprocessCLITransport               │    │   │
-│  │  │  Process lifecycle & I/O management         │    │   │
-│  │  └─────────────────────────────────────────────┘    │   │
-│  └─────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+block-beta
+    columns 1
+    block:client["ClaudeSDKClient — High-level bidirectional client"]
+        columns 1
+        block:query["Query — Control protocol handler"]
+            columns 1
+            transport["SubprocessCLITransport — Process lifecycle & I/O management"]
+        end
+    end
 ```
 
 ### Layers
@@ -148,32 +145,18 @@ When Claude wants to use a tool that's not in `AllowedTools`, a permission decis
 
 **The Flow:**
 
-```
-┌─────────────┐     tool_use      ┌─────────────┐
-│   Claude    │ ─────────────────>│  Claude CLI │
-│   (API)     │                   │             │
-└─────────────┘                   └──────┬──────┘
-                                         │
-                                         │ control_request
-                                         │ (subtype: can_use_tool)
-                                         ▼
-                                  ┌─────────────┐
-                                  │   Go SDK    │
-                                  │   Query     │
-                                  └──────┬──────┘
-                                         │
-                                         │ CanUseTool callback
-                                         ▼
-                                  ┌─────────────┐
-                                  │  Your App   │
-                                  │  (approve?) │
-                                  └──────┬──────┘
-                                         │
-                                         │ PermissionResultAllow/Deny
-                                         ▼
-                                  ┌─────────────┐
-                                  │   Go SDK    │ ─── control_response ───> CLI
-                                  └─────────────┘
+```mermaid
+sequenceDiagram
+    participant Claude as Claude (API)
+    participant CLI as Claude CLI
+    participant SDK as Go SDK (Query)
+    participant App as Your App
+
+    Claude->>CLI: tool_use
+    CLI->>SDK: control_request<br/>(subtype: can_use_tool)
+    SDK->>App: CanUseTool callback
+    App->>SDK: PermissionResultAllow/Deny
+    SDK->>CLI: control_response
 ```
 
 **Key Mechanism: `--permission-prompt-tool stdio`**

@@ -672,35 +672,17 @@ All code paths use `fs.Service` methods:
 
 Keep it simple - minimal new abstractions:
 
-```
-┌──────────────────────────────────────────────────────────┐
-│                     FS Service                            │
-├──────────────────────────────────────────────────────────┤
-│                                                          │
-│   ┌─────────┐     ┌─────────┐     ┌─────────┐           │
-│   │   API   │     │ Watcher │     │ Scanner │           │
-│   └────┬────┘     └────┬────┘     └────┬────┘           │
-│        │               │               │                 │
-│        │               ▼               │                 │
-│        │         ┌──────────┐          │                 │
-│        │         │Debouncer │          │                 │
-│        │         │  +Move   │          │                 │
-│        │         │ Detector │          │                 │
-│        │         └────┬─────┘          │                 │
-│        │              │                │                 │
-│        ▼              ▼                ▼                 │
-│   ┌────────────────────────────────────────┐            │
-│   │         processFile(path)              │            │
-│   │   (with per-file lock via fileLock)    │            │
-│   └────────────────────────────────────────┘            │
-│                       │                                  │
-│        ┌──────────────┼──────────────┐                  │
-│        ▼              ▼              ▼                  │
-│   ┌─────────┐   ┌──────────┐   ┌──────────┐            │
-│   │  Disk   │   │ Database │   │ Notifier │            │
-│   └─────────┘   └──────────┘   └──────────┘            │
-│                                                          │
-└──────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph FSService["FS Service"]
+        API["API"] & Watcher & Scanner
+
+        Watcher --> Debouncer["Debouncer\n+ Move Detector"]
+
+        API & Debouncer & Scanner --> ProcessFile["processFile(path)\n(with per-file lock via fileLock)"]
+
+        ProcessFile --> Disk & Database & Notifier
+    end
 ```
 
 Key points:

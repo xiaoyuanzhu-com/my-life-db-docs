@@ -70,61 +70,26 @@ cd backend && go run .
 
 ### Component Overview
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│ Browser (Desktop/Mobile)                                        │
-│  ┌────────┬────────┬────────┐                                  │
-│  │ Tab 1  │ Tab 2  │ Tab 3  │  (xterm.js terminals)            │
-│  │Session1│Session1│Session2│  (tabs can share sessions)       │
-│  └────┬───┴───┬────┴───┬────┘                                  │
-│       │       │        │                                        │
-│       │ WebSocket (binary I/O, no transformation)              │
-│       │       │        │                                        │
-└───────┼───────┼────────┼────────────────────────────────────────┘
-        │       │        │
-        ▼       ▼        ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ Go Backend (MyLifeDB)                                           │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │ WebSocket Handler (coder/websocket)                       │  │
-│  │  - Accept connections                                     │  │
-│  │  - Register client with session                           │  │
-│  │  - Broadcast PTY output to all clients                    │  │
-│  └────────────────┬─────────────────────────────────────────┘  │
-│                   │                                             │
-│  ┌────────────────▼─────────────────────────────────────────┐  │
-│  │ Session Manager                                           │  │
-│  │  - Create/list/delete sessions                            │  │
-│  │  - Track process lifecycle                                │  │
-│  │  - Manage multiple clients per session                    │  │
-│  │  - Sessions stored in-memory (ephemeral)                  │  │
-│  └────────────────┬─────────────────────────────────────────┘  │
-│                   │                                             │
-│  ┌────────────────▼─────────────────────────────────────────┐  │
-│  │ PTY Manager (creack/pty)                                  │  │
-│  │  - Spawn claude CLI processes                             │  │
-│  │  - One PTY per session                                    │  │
-│  │  - Read PTY once, broadcast to all clients                │  │
-│  └────────────────┬─────────────────────────────────────────┘  │
-│                   │                                             │
-└───────────────────┼─────────────────────────────────────────────┘
-                    │
-                    ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ Claude Code CLI Processes                                       │
-│  ┌──────────┐  ┌──────────┐                                   │
-│  │ claude   │  │ claude   │                                   │
-│  │(Session1)│  │(Session2)│                                   │
-│  └─────┬────┘  └─────┬────┘                                   │
-│        │             │                                         │
-│        └─────────────┘                                         │
-│                │                                                │
-│                ▼                                                │
-│        ┌───────────────┐                                       │
-│        │  ~/.claude/   │                                       │
-│        │  (Shared auth)│                                       │
-│        └───────────────┘                                       │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph Browser["Browser (Desktop/Mobile)"]
+        Tab1["Tab 1\nSession1"] & Tab2["Tab 2\nSession1"] & Tab3["Tab 3\nSession2"]
+    end
+
+    Tab1 & Tab2 & Tab3 -- "WebSocket\n(binary I/O, no transformation)" --> WS
+
+    subgraph Backend["Go Backend (MyLifeDB)"]
+        WS["WebSocket Handler\n(coder/websocket)\nAccept connections\nRegister client with session\nBroadcast PTY output to all clients"]
+        WS --> SM["Session Manager\nCreate/list/delete sessions\nTrack process lifecycle\nManage multiple clients per session\nSessions stored in-memory (ephemeral)"]
+        SM --> PTY["PTY Manager\n(creack/pty)\nSpawn claude CLI processes\nOne PTY per session\nRead PTY once, broadcast to all clients"]
+    end
+
+    subgraph CLI["Claude Code CLI Processes"]
+        C1["claude\n(Session1)"] & C2["claude\n(Session2)"]
+        C1 & C2 --> Auth["~/.claude/\n(Shared auth)"]
+    end
+
+    PTY --> C1 & C2
 ```
 
 ## Claude Authentication Directory Setup

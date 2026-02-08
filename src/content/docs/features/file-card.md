@@ -244,17 +244,17 @@ Each card builds its own action list and passes to the wrapper. Shared actions u
 
 The modal system uses a **centralized architecture** where navigation is transparent to content:
 
-```
-ModalNavigationProvider (context)
-├── children (cards, feed)
-└── FileModal (single centralized modal)
-    ├── Dialog (always mounted when open)
-    ├── ModalShell (close button, action buttons)
-    └── ModalLayout (A4 sizing, digests side-by-side/overlay, navigation)
-        ├── ContentPane (keyboard/swipe navigation)
-        │   └── <TypeContent /> (pure content renderer)
-        └── DigestsPane (when visible)
-            └── <DigestsPanel />
+```mermaid
+graph TD
+    MNP["ModalNavigationProvider (context)"] --> Children["children (cards, feed)"]
+    MNP --> FM["FileModal (single centralized modal)"]
+    FM --> Dialog["Dialog (always mounted when open)"]
+    FM --> MS["ModalShell (close button, action buttons)"]
+    FM --> ML["ModalLayout (A4 sizing, digests side-by-side/overlay, navigation)"]
+    ML --> CP["ContentPane (keyboard/swipe navigation)"]
+    ML --> DP["DigestsPane (when visible)"]
+    CP --> TC["TypeContent (pure content renderer)"]
+    DP --> DPanel["DigestsPanel"]
 ```
 
 **Design Principles:**
@@ -307,18 +307,16 @@ When viewing files in modal mode, users can navigate between files without closi
 
 ## Props Flow
 
-```
-FileCard (receives FileWithDigests)
-  │
-  ├── getFileContentType() → determines which card to use
-  │
-  └── CardComponent (self-contained)
-        ├── Renders content
-        ├── Owns internal state (expand, copy, preview, delete dialog)
-        ├── Builds action list
-        ├── Renders ContextMenuWrapper with actions
-        ├── Renders Modal (if applicable)
-        └── Renders DeleteConfirmDialog
+```mermaid
+flowchart TD
+    FC["FileCard (receives FileWithDigests)"] --> GCT["getFileContentType() → determines which card to use"]
+    FC --> CC["CardComponent (self-contained)"]
+    CC --> R1["Renders content"]
+    CC --> R2["Owns internal state (expand, copy, preview, delete dialog)"]
+    CC --> R3["Builds action list"]
+    CC --> R4["Renders ContextMenuWrapper with actions"]
+    CC --> R5["Renders Modal (if applicable)"]
+    CC --> R6["Renders DeleteConfirmDialog"]
 ```
 
 ## State Management

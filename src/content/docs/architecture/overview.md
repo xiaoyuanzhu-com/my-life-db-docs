@@ -16,14 +16,14 @@ The backend is the system's core - it provides APIs, runs background workers, ma
 
 All stateful components are owned by a single `Server` struct (`backend/server/server.go`). This is the foundational pattern of the codebase.
 
-```
-Server
-├── database (*db.DB)           # SQLite database
-├── notifService                # SSE event broadcasting
-├── fsService                   # Filesystem watching/scanning
-├── digestWorker                # Background file processing
-├── router (*gin.Engine)        # HTTP routes
-└── shutdownCtx                 # Graceful shutdown signaling
+```mermaid
+graph TD
+    Server --> database["database (*db.DB)<br/>SQLite database"]
+    Server --> notifService["notifService<br/>SSE event broadcasting"]
+    Server --> fsService["fsService<br/>Filesystem watching/scanning"]
+    Server --> digestWorker["digestWorker<br/>Background file processing"]
+    Server --> router["router (*gin.Engine)<br/>HTTP routes"]
+    Server --> shutdownCtx["shutdownCtx<br/>Graceful shutdown signaling"]
 ```
 
 ### Why This Matters
@@ -85,21 +85,15 @@ When working on a specific area, read the corresponding component doc:
 
 Components communicate via callbacks and channels, not direct method calls:
 
-```
-File created/modified
-    ↓
-FS Service detects change
-    ↓
-Calls fileChangeHandler callback
-    ↓
-├── Digest Worker queues file for processing
-└── Notifications Service broadcasts to UI
-    ↓
-Digest Worker processes file
-    ↓
-Notifications Service broadcasts completion
-    ↓
-Frontend updates UI
+```mermaid
+flowchart TD
+    A["File created/modified"] --> B["FS Service detects change"]
+    B --> C["Calls fileChangeHandler callback"]
+    C --> D["Digest Worker queues file for processing"]
+    C --> E["Notifications Service broadcasts to UI"]
+    D --> F["Digest Worker processes file"]
+    F --> G["Notifications Service broadcasts completion"]
+    G --> H["Frontend updates UI"]
 ```
 
 ### Wiring Pattern

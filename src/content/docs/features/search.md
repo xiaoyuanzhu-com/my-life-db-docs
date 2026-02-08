@@ -204,35 +204,12 @@ src/
 
 ### 2.2 Data Flow
 
-```
-┌─────────────┐
-│   User      │
-│   Types     │
-└──────┬──────┘
-       │
-       ▼
-┌─────────────────────────────────┐
-│  OmniInput Component            │
-│  - Detect input change          │
-│  - Calculate adaptive debounce  │
-│  - Cancel previous search       │
-└──────┬──────────────────────────┘
-       │ (after debounce)
-       ▼
-┌─────────────────────────────────┐
-│  GET /api/search?q=...          │
-│  - Validate query (min 2 chars) │
-│  - Search Meilisearch           │
-│  - Enrich with files table      │
-└──────┬──────────────────────────┘
-       │
-       ▼
-┌─────────────────────────────────┐
-│  SearchResults Component        │
-│  - Render result cards          │
-│  - Handle interactions          │
-│  - Manage pagination            │
-└─────────────────────────────────┘
+```mermaid
+flowchart TD
+    A["User Types"] --> B
+    B["OmniInput Component\n- Detect input change\n- Calculate adaptive debounce\n- Cancel previous search"] -->|"after debounce"| C
+    C["GET /api/search?q=...\n- Validate query (min 2 chars)\n- Search Meilisearch\n- Enrich with files table"] --> D
+    D["SearchResults Component\n- Render result cards\n- Handle interactions\n- Manage pagination"]
 ```
 
 ### 2.3 State Management
@@ -362,51 +339,36 @@ interface SearchResultItem {
 
 ### 4.1 Search Flow
 
-```
-1. User types in OmniInput
-   ↓
-2. Calculate adaptive debounce delay based on query length
-   ↓
-3. Wait for debounce period (timer resets on each keystroke)
-   ↓
-4. Timer expires → Trigger search
-   ↓
-5. Show loading state (skeleton cards)
-   ↓
-6. Call GET /api/search?q={query}
-   ↓
-7. Receive results
-   ↓
-8. Render SearchResults component with cards
-   ↓
-9. User can interact with results or continue typing
+```mermaid
+flowchart TD
+    S1["1. User types in OmniInput"] --> S2["2. Calculate adaptive debounce delay based on query length"]
+    S2 --> S3["3. Wait for debounce period (timer resets on each keystroke)"]
+    S3 --> S4["4. Timer expires → Trigger search"]
+    S4 --> S5["5. Show loading state (skeleton cards)"]
+    S5 --> S6["6. Call GET /api/search?q=query"]
+    S6 --> S7["7. Receive results"]
+    S7 --> S8["8. Render SearchResults component with cards"]
+    S8 --> S9["9. User can interact with results or continue typing"]
 ```
 
 ### 4.2 Pagination Flow
 
-```
-1. Initial search returns first 20 results
-   ↓
-2. User scrolls to bottom, clicks "Load More"
-   ↓
-3. Call GET /api/search?q={query}&offset=20
-   ↓
-4. Append new results to existing list
-   ↓
-5. Repeat until hasMore = false
+```mermaid
+flowchart TD
+    P1["1. Initial search returns first 20 results"] --> P2["2. User scrolls to bottom, clicks 'Load More'"]
+    P2 --> P3["3. Call GET /api/search?q=query&offset=20"]
+    P3 --> P4["4. Append new results to existing list"]
+    P4 --> P5{"5. hasMore?"}
+    P5 -->|"Yes"| P2
+    P5 -->|"No"| P6["Done"]
 ```
 
 ### 4.3 Result Interaction Flow
 
-```
-User clicks on result card
-   ↓
-Navigate to /files/{encoded-path}
-   ↓
-Show file detail view with:
-   - Full content
-   - All digests
-   - Edit/delete actions
+```mermaid
+flowchart TD
+    R1["User clicks on result card"] --> R2["Navigate to /files/encoded-path"]
+    R2 --> R3["Show file detail view with:\n- Full content\n- All digests\n- Edit/delete actions"]
 ```
 
 ---

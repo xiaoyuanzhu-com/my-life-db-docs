@@ -700,27 +700,11 @@ The WebSearch tool result has a unique structure where the `results` array is he
 
 Unlike regular tools which have a simple 1:1 relationship (tool_use → tool_result), the **Task tool** spawns a subagent and can emit multiple progress messages before completing:
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│ Assistant Message (uuid: A)                                     │
-│   └── tool_use: Task (id: toolu_xxx)                           │
-└─────────────────────────────────────────────────────────────────┘
-         │
-         │ parentUuid: A
-         ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ Progress Message (type: progress, data.type: agent_progress)   │
-│   - Reports agent spawned and working                          │
-│   - Can have 0 or more of these                                │
-└─────────────────────────────────────────────────────────────────┘
-         │
-         │ parentUuid: A (same parent)
-         ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ User Message (tool_result)                                      │
-│   - Final result from subagent                                 │
-│   - Exactly 1 per Task tool_use                                │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A["Assistant Message (uuid: A)\ntool_use: Task (id: toolu_xxx)"]
+    A -- "parentUuid: A" --> B["Progress Message\n(type: progress, data.type: agent_progress)\nReports agent spawned and working\nCan have 0 or more of these"]
+    B -- "parentUuid: A (same parent)" --> C["User Message (tool_result)\nFinal result from subagent\nExactly 1 per Task tool_use"]
 ```
 
 **Complete Task Tool Example:**
@@ -864,24 +848,24 @@ This field appears on messages that belong to a subagent conversation. It points
 
 **Visual Hierarchy:**
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ TOP-LEVEL SESSION                                                    │
-├──────────────────────────────────────────────────────────────────────┤
-│ assistant: "I'll explore this for you"                               │
-│            tool_use Task (id: toolu_ABC, parent_tool_use_id: null)   │
-│ ┌──────────────────────────────────────────────────────────────────┐ │
-│ │ SUBAGENT SESSION (all messages have parent_tool_use_id: toolu_ABC)│
-│ ├──────────────────────────────────────────────────────────────────┤ │
-│ │ user: "Explore the file system..." (prompt to subagent)          │ │
-│ │ assistant: tool_use Read (subagent's first tool call)            │ │
-│ │ user: tool_result for Read                                       │ │
-│ │ assistant: tool_use Grep (subagent's second tool call)           │ │
-│ │ user: tool_result for Grep                                       │ │
-│ │ assistant: "Here's what I found..." (subagent's final response)  │ │
-│ └──────────────────────────────────────────────────────────────────┘ │
-│ user: tool_result for Task (final result returned to parent)         │
-└──────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph TopLevel["TOP-LEVEL SESSION"]
+        A1["assistant: 'I'll explore this for you'\ntool_use Task (id: toolu_ABC)"]
+
+        subgraph Subagent["SUBAGENT SESSION\n(all messages have parent_tool_use_id: toolu_ABC)"]
+            S1["user: 'Explore the file system...' (prompt)"]
+            S2["assistant: tool_use Read (first tool call)"]
+            S3["user: tool_result for Read"]
+            S4["assistant: tool_use Grep (second tool call)"]
+            S5["user: tool_result for Grep"]
+            S6["assistant: 'Here's what I found...' (final response)"]
+            S1 --> S2 --> S3 --> S4 --> S5 --> S6
+        end
+
+        A1 --> S1
+        S6 --> R1["user: tool_result for Task\n(final result returned to parent)"]
+    end
 ```
 
 **Identifying Task Tools (Parent):**
@@ -1100,68 +1084,23 @@ AskUserQuestion uses the **same `control_request`/`control_response` protocol** 
 
 **Flow:**
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│ 1. Claude calls AskUserQuestion tool                                            │
-│    └── assistant message with tool_use: AskUserQuestion                         │
-└─────────────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│ 2. SDK CanUseTool callback is invoked                                           │
-│    └── Standard permission flow (no special case for AskUserQuestion)           │
-└─────────────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│ 3. control_request broadcast to frontend via WebSocket                          │
-│    {                                                                            │
-│      "type": "control_request",                                                 │
-│      "request_id": "sdk-perm-1738668123456789",                                 │
-│      "request": {                                                               │
-│        "subtype": "can_use_tool",                                               │
-│        "tool_name": "AskUserQuestion",                                          │
-│        "input": { "questions": [...] }                                          │
-│      }                                                                          │
-│    }                                                                            │
-└─────────────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│ 4. Frontend detects tool_name="AskUserQuestion", shows question UI              │
-│    └── NOT the permission UI - a dedicated question card                        │
-└─────────────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│ 5. Frontend sends control_response with updated_input containing answers        │
-│    {                                                                            │
-│      "type": "control_response",                                                │
-│      "request_id": "sdk-perm-1738668123456789",                                 │
-│      "response": {                                                              │
-│        "subtype": "success",                                                    │
-│        "response": {                                                            │
-│          "behavior": "allow",                                                   │
-│          "updated_input": {                                                     │
-│            "questions": [...],                                                  │
-│            "answers": {"What is your favorite color?": "Blue"}                  │
-│          }                                                                      │
-│        }                                                                        │
-│      }                                                                          │
-│    }                                                                            │
-└─────────────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│ 6. SDK callback returns PermissionResultAllow with UpdatedInput                 │
-│    └── Contains both questions AND answers                                      │
-└─────────────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│ 7. Claude receives tool_result with user's answers                              │
-│    └── Continues conversation with knowledge of user's selection                │
-└─────────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+sequenceDiagram
+    participant Claude as 1. Claude
+    participant SDK as 2. SDK (CanUseTool)
+    participant WS as 3. WebSocket
+    participant UI as 4. Frontend
+
+    Claude->>SDK: tool_use: AskUserQuestion
+    Note over SDK: Standard permission flow<br/>(no special case)
+    SDK->>WS: control_request<br/>tool_name: "AskUserQuestion"<br/>input: { questions: [...] }
+    WS->>UI: Broadcast control_request
+    Note over UI: Detects tool_name="AskUserQuestion"<br/>Shows question UI (NOT permission UI)
+    UI->>WS: control_response with updated_input<br/>{ answers: {"question": "answer"} }
+    WS->>SDK: 5. Forward control_response
+    Note over SDK: 6. Returns PermissionResultAllow<br/>with UpdatedInput (questions + answers)
+    SDK->>Claude: 7. tool_result with user's answers
+    Note over Claude: Continues with knowledge<br/>of user's selection
 ```
 
 **control_request for AskUserQuestion:**
