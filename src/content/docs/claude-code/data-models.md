@@ -1828,6 +1828,7 @@ Stream events contain Anthropic API streaming events, enabling progressive text 
 ```json
 {"type":"queue-operation","operation":"dequeue","timestamp":"2026-01-19T04:45:15.003Z","sessionId":"..."}
 {"type":"file-history-snapshot","messageId":"...","snapshot":{"trackedFileBackups":{},"timestamp":"..."},"isSnapshotUpdate":false}
+{"type":"stream_event","event":{"type":"message_stop"},"parent_tool_use_id":null,"session_id":"...","uuid":"..."}
 ```
 
 **Threading**: Messages form a tree structure using `uuid` and `parentUuid`:

@@ -1346,6 +1346,7 @@ Some message types are intentionally **not rendered** in the chat interface as s
 | `system.subtype: status` | Rendered as **transient indicator** at end of message list when non-null (e.g., "Compacting..."). Disappears when status is null. |
 | `type: "control_request"` | Permission protocol message - triggers permission modal, not a chat message |
 | `type: "control_response"` | Permission protocol message - sent from UI to CLI via stdin, not displayed |
+| `type: "stream_event"` | Streaming transport signals (e.g., `message_start`, `content_block_delta`, `message_stop`). Stdout only, requires `--include-partial-messages`. No user-facing content. |
 | `parent_tool_use_id` set | Subagent messages - rendered inside parent Task tool, not as top-level messages. See [data-models.md "Subagent Message Hierarchy"](./data-models.md#subagent-message-hierarchy--critical). |
 
 **Progress Messages:**
