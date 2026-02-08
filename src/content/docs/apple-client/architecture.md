@@ -4,6 +4,9 @@ title: "MyLifeDB Apple Client - Architecture"
 
 > Native iOS/macOS client for the MyLifeDB personal knowledge management system.
 
+**Related docs:**
+- **[UI Architecture](./ui-architecture)** -- Hybrid Native + WebView UI approach
+
 ---
 
 ## Design Principles
@@ -23,31 +26,46 @@ The app uses **SwiftUI** with a single Xcode target that builds for:
 
 **Code sharing goal:** 80-95% shared code across all platforms.
 
-### 2. Client-Server Architecture
+### 2. Hybrid Native + WebView Architecture
 
-The app is a **native client** that consumes the MyLifeDB backend API:
+The app uses a **hybrid approach**: native SwiftUI shell with WebView-rendered content.
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Clients                                  │
-├─────────────────────────┬───────────────────────────────────────┤
-│   iOS/macOS App         │   Web App (React)                     │
-│   (This project)        │   (my-life-db/frontend)               │
-└───────────┬─────────────┴───────────────────┬───────────────────┘
-            │                                 │
-            └─────────────┬───────────────────┘
-                          ↓
-            ┌─────────────────────────────┐
-            │   MyLifeDB Backend (Go)     │
-            │   REST API + WebSocket      │
-            │   Port 12345                │
-            └─────────────────────────────┘
-                          ↓
-            ┌─────────────────────────────┐
-            │   User Data Directory       │
-            │   (Source of Truth)         │
-            └─────────────────────────────┘
++-------------------------------------------------------------+
+|                    iOS/macOS App (This Project)                |
++-------------------------------------------------------------+
+|   +---------------------+    +-----------------------------+  |
+|   |  Native SwiftUI     |    |  WKWebView                  |  |
+|   |  Shell              |    |  (Embedded Web Frontend)     |  |
+|   |                     |    |                              |  |
+|   |  . Tab bar/Sidebar  |<-->|  . Document viewer           |  |
+|   |  . Navigation       | JS |  . Library browser           |  |
+|   |  . Share extension  |Brdg|  . Search results            |  |
+|   |  . Widgets          |    |  . Rich content (MD, code)   |  |
+|   |  . Notifications    |    |  . Mermaid diagrams          |  |
+|   +---------------------+    +-----------------------------+  |
++-----------------------------------+---------------------------+
+                                    |
+                                    v
+                      +-----------------------------+
+                      |   MyLifeDB Backend (Go)     |
+                      |   REST API + SSE            |
+                      |   Port 12345                |
+                      +-----------------------------+
+                                    |
+                      +-----------------------------+
+                      |   User Data Directory       |
+                      |   (Source of Truth)          |
+                      +-----------------------------+
 ```
+
+**Why hybrid?**
+- Reuse 80%+ of existing web frontend code
+- Web excels at rich content (Markdown, code highlighting, Mermaid)
+- Industry standard (Instagram, Uber, Slack, Discord use this approach)
+- Single codebase for complex UI, faster iteration
+
+**See [UI Architecture](./ui-architecture)** for detailed UI implementation.
 
 **Key insight:** The backend owns all data. The iOS app is a view into that data.
 
@@ -56,18 +74,18 @@ The app is a **native client** that consumes the MyLifeDB backend API:
 The app directly fetches from the backend API. No local caching or sync logic.
 
 ```
-┌─────────────────────────────────────────┐
-│           iOS/macOS App                  │
-├─────────────────────────────────────────┤
-│  SwiftUI Views                          │
-│       ↓                                 │
-│  API Client → Backend API               │
-└─────────────────────────────────────────┘
++------------------------------------------+
+|           iOS/macOS App                   |
++------------------------------------------+
+|  SwiftUI Views                           |
+|       |                                  |
+|  API Client -> Backend API               |
++------------------------------------------+
 ```
 
-- **Fetch on demand** — Views request data from API when needed
-- **No local database** — Data lives on the backend only
-- **Simple error handling** — Show error states when offline
+- **Fetch on demand** -- Views request data from API when needed
+- **No local database** -- Data lives on the backend only
+- **Simple error handling** -- Show error states when offline
 
 ---
 
@@ -75,43 +93,43 @@ The app directly fetches from the backend API. No local caching or sync logic.
 
 ```
 MyLifeDB/
-├── App/
-│   └── MyLifeDBApp.swift          # Entry point
-│
-├── API/                           # Backend API client
-│   ├── APIClient.swift            # HTTP client with auth
-│   ├── Endpoints/                 # Endpoint definitions
-│   │   ├── InboxAPI.swift
-│   │   ├── LibraryAPI.swift
-│   │   ├── SearchAPI.swift
-│   │   └── PeopleAPI.swift
-│   └── Models/                    # API response types (Codable structs)
-│       ├── InboxItem.swift
-│       ├── FileRecord.swift
-│       ├── SearchResult.swift
-│       └── ...
-│
-├── Views/                         # SwiftUI views
-│   ├── Inbox/
-│   │   ├── InboxView.swift
-│   │   └── InboxItemRow.swift
-│   ├── Library/
-│   │   ├── LibraryView.swift
-│   │   └── FileTreeView.swift
-│   ├── Search/
-│   │   └── SearchView.swift
-│   ├── People/
-│   │   └── PeopleView.swift
-│   └── Shared/
-│       ├── FilePreview.swift
-│       └── DigestBadge.swift
-│
-├── Platform/                      # Platform-specific code
-│   ├── iOS/
-│   └── macOS/
-│
-└── Resources/
-    └── Assets.xcassets
++-- App/
+|   +-- MyLifeDBApp.swift          # Entry point
+|
++-- API/                           # Backend API client
+|   +-- APIClient.swift            # HTTP client with auth
+|   +-- Endpoints/                 # Endpoint definitions
+|   |   +-- InboxAPI.swift
+|   |   +-- LibraryAPI.swift
+|   |   +-- SearchAPI.swift
+|   |   +-- PeopleAPI.swift
+|   +-- Models/                    # API response types (Codable structs)
+|       +-- InboxItem.swift
+|       +-- FileRecord.swift
+|       +-- SearchResult.swift
+|       +-- ...
+|
++-- Views/                         # SwiftUI views
+|   +-- Inbox/
+|   |   +-- InboxView.swift
+|   |   +-- InboxItemRow.swift
+|   +-- Library/
+|   |   +-- LibraryView.swift
+|   |   +-- FileTreeView.swift
+|   +-- Search/
+|   |   +-- SearchView.swift
+|   +-- People/
+|   |   +-- PeopleView.swift
+|   +-- Shared/
+|       +-- FilePreview.swift
+|       +-- DigestBadge.swift
+|
++-- Platform/                      # Platform-specific code
+|   +-- iOS/
+|   +-- macOS/
+|
++-- Resources/
+    +-- Assets.xcassets
 ```
 
 ---
@@ -122,13 +140,13 @@ MyLifeDB/
 
 ```
 1. View appears or user triggers refresh
-        ↓
+        |
 2. Call API endpoint (async/await)
-        ↓
+        |
 3. Decode JSON response to Swift structs
-        ↓
+        |
 4. Update @State / @Observable in view
-        ↓
+        |
 5. SwiftUI re-renders
 ```
 
@@ -136,20 +154,20 @@ MyLifeDB/
 
 ```
 1. User action (e.g., pin a file)
-        ↓
+        |
 2. POST/PUT to backend API
-        ↓
+        |
 3. On success: update view state
    On failure: show error alert
 ```
 
-### Real-time Updates (SSE) — Optional
+### Real-time Updates (SSE) -- Optional
 
 ```
 Backend SSE Stream (/api/notifications/stream)
-        ↓
+        |
 Parse event type (file_changed, digest_completed, etc.)
-        ↓
+        |
 Trigger view refresh for affected data
 ```
 
@@ -203,7 +221,7 @@ The app consumes these key API endpoints:
 
 ---
 
-## Key Types (Backend → Swift Mapping)
+## Key Types (Backend -> Swift Mapping)
 
 ### FileRecord
 ```swift
@@ -313,6 +331,6 @@ For OAuth, the app uses ASWebAuthenticationSession for the login flow.
 
 ## Future Considerations
 
-1. **Widgets** — Show pinned items or recent inbox on home screen
-2. **Shortcuts** — Siri shortcuts for quick capture
-3. **Share Extension** — Save content from other apps to inbox
+1. **Widgets** -- Show pinned items or recent inbox on home screen
+2. **Shortcuts** -- Siri shortcuts for quick capture
+3. **Share Extension** -- Save content from other apps to inbox
