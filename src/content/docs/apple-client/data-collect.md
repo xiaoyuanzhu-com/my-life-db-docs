@@ -242,18 +242,20 @@ Data from HealthKit (requires user permission).
 
 ## Collection Architecture
 
-Data flows from device to MyLifeDB backend:
+Data flows from device to MyLifeDB backend via incremental sync:
 
 ```mermaid
 flowchart LR
-    A["Apple Device"] --> B["App (collect)"] --> C["REST API"] --> D["MyLifeDB Server"] --> E["Storage"]
+    A["Apple Device\n(HealthKit)"] --> B["Anchored Query\n(only new samples)"] --> C["Group by\nsample date"] --> D["PUT /raw/*\n(one file per day)"] --> E["MyLifeDB Server\n(append-only storage)"]
 ```
 
 - Each data source has an independent toggle in Settings > Data Collect
 - Collection runs on device, respects system permissions
+- **Foreground sync**: runs when user opens the app (throttled, e.g., every 5 min)
+- **Background sync**: daily fallback via iOS Background Tasks (~midnight)
+- Sync is **incremental** — uses `HKAnchoredObjectQuery` to fetch only new samples since last sync
 - Data is sent to the configured MyLifeDB server
 - No third-party services — your data stays on your server
-- Background refresh keeps data current (iOS Background Tasks, macOS background agent)
 
 ---
 
@@ -331,31 +333,54 @@ Every HealthKit sample — regardless of type — shares the same core shape:
 
 ### Storage Layout
 
-Files are organized by day under the life-db `imports/` folder:
+Files are organized by day under the life-db `imports/` folder. Each day is a **folder** containing one or more JSON files from individual sync sessions:
 
 ```
 imports/fitness/apple-health/
 ├── raw/
 │   └── 2025/
 │       ├── 01/
-│       │   ├── 2025-01-15.json
-│       │   ├── 2025-01-16.json
+│       │   ├── 15/
+│       │   │   ├── 2025-01-15T08-30-00Z.json    # morning sync
+│       │   │   ├── 2025-01-15T12-15-00Z.json    # midday sync
+│       │   │   └── 2025-01-15T18-45-00Z.json    # evening sync
+│       │   ├── 16/
+│       │   │   ├── 2025-01-16T09-00-00Z.json
+│       │   │   └── 2025-01-16T23-05-00Z.json
 │       │   └── ...
 │       └── 02/
-│           ├── 2025-02-01.json
 │           └── ...
 ├── types.json          # Reference: type IDs → human names, enum mappings
 └── README.md           # Documents format
 ```
 
-**One JSON file per day.** Each file contains all raw samples for that calendar day.
+**One folder per day, multiple JSON files per sync session.** Each file contains only the new samples from that sync — an append-only log.
 
-### Daily File Format
+- **Folder = sample date** — determined by the sample's `startDate` (when the event happened, not when it was synced)
+- **Filename = sync timestamp** — when the data was uploaded (always unique, monotonically increasing)
+- **To read a full day** — read all files in the folder and concatenate the `samples` arrays
+
+#### Cross-day samples
+
+A sample's `startDate` determines its folder. For duration-based events (workouts, sleep) that span midnight, the sample goes in the folder of its start date. For example, a workout from 11:30pm to 12:45am lives in the day it started.
+
+#### Late-arriving data
+
+When data arrives late (e.g., Apple Watch reconnects after being offline), the samples still go into the folder matching their `startDate`. A sync on Feb 9 might produce files in multiple day folders:
+
+```
+raw/2025/02/07/2025-02-09T09-00-00Z.json   # 5 samples from Feb 7 (watch was offline)
+raw/2025/02/08/2025-02-09T09-00-00Z.json   # 30 samples from Feb 8
+raw/2025/02/09/2025-02-09T09-00-00Z.json   # 15 samples from today
+```
+
+### Sync File Format
+
+Each sync produces a JSON file containing only the new samples since the last sync:
 
 ```json
 {
-  "date": "2025-01-15",
-  "exported_at": "2025-01-16T00:05:00Z",
+  "synced_at": "2025-01-15T08:30:00Z",
   "device_info": {
     "phone": "iPhone 15 Pro",
     "watch": "Apple Watch Series 9",
@@ -439,68 +464,92 @@ Samples are sorted by `start` time. All types are mixed together in a single chr
 | Others | 50–100 | small | — |
 | **Total** | **~700–2400** | **500KB–2MB** | **200–700MB** |
 
-### Collection Schedule
+### Sync Engine: Anchored Queries
 
-The app collects data **daily** via iOS Background Tasks:
+The sync engine uses `HKAnchoredObjectQuery` — a cursor-based API that returns only new or modified samples since the last sync. The anchor is persisted locally so each sync is incremental, regardless of when or why it's triggered.
+
+```swift
+// Incremental query — returns only new samples since last anchor
+func newSamples(type: HKSampleType) async throws -> (samples: [RawSample], newAnchor: HKQueryAnchor?) {
+    let anchor = loadAnchor(for: type)  // from UserDefaults / local file
+    let descriptor = HKAnchoredObjectQueryDescriptor(
+        predicates: [.sample(type: type)],
+        anchor: anchor
+    )
+    let results = try await descriptor.result(for: healthStore)
+    let samples = results.addedSamples.map { RawSample(from: $0) }
+    return (samples, results.newAnchor)
+}
+
+// Sync all enabled types, split by sample date, upload
+func sync() async throws {
+    var allSamples: [RawSample] = []
+
+    for type in enabledTypes {
+        let (samples, newAnchor) = try await newSamples(type: type)
+        allSamples.append(contentsOf: samples)
+        if let newAnchor { saveAnchor(newAnchor, for: type) }
+    }
+
+    // Group samples by startDate's calendar day
+    let byDay = Dictionary(grouping: allSamples) { $0.start.calendarDay }
+
+    // Upload one file per day
+    for (day, samples) in byDay {
+        let sorted = samples.sorted { $0.start < $1.start }
+        let file = SyncFile(syncedAt: .now, deviceInfo: currentDeviceInfo(), samples: sorted)
+        let path = "imports/fitness/apple-health/raw/\(day.path)/\(ISO8601Timestamp()).json"
+        try await apiClient.put(path: path, body: file)
+    }
+}
+```
+
+### Sync Triggers
+
+The sync engine is triggered in two ways:
+
+**1. Foreground sync (primary)** — runs when the user opens the app or brings it to foreground:
 
 ```mermaid
 flowchart TD
-    Start["Daily Background Task (~midnight)"] --> Step1["1. Query HealthKit for all enabled types,\nyesterday's range"]
-    Step1 --> Step2["2. Serialize raw samples to JSON"]
-    Step2 --> Step3["3. PUT /raw/imports/fitness/apple-health/\nraw/YYYY/MM/YYYY-MM-DD.json"]
-    Step3 --> Step4["4. On success, record last-exported date locally"]
-    Step4 --> Check{"Missed days\ndetected?"}
-    Check -- Yes --> Backfill["Backfill each missing day"]
-    Backfill --> Step1
-    Check -- No --> Done["Done"]
+    Open["App enters foreground"] --> Check{"Last sync\n> 5 min ago?"}
+    Check -- No --> Skip["Skip (throttled)"]
+    Check -- Yes --> Sync["Run anchored query\nfor all enabled types"]
+    Sync --> Split["Group samples by startDate"]
+    Split --> Upload["PUT each day's file\nto backend"]
+    Upload --> Save["Save new anchors\n+ last sync time"]
 ```
 
-- **Delay**: ~1 day (yesterday's data exported after midnight)
-- **Catch-up**: If the app missed a day (device off, no background time), it detects gaps and backfills
-- **Idempotent**: Re-exporting the same day overwrites the file — safe to retry
+- Hooks into the existing `.onChange(of: scenePhase)` in `MyLifeDBApp.swift`
+- Throttled to avoid excessive syncs (minimum interval, e.g., 5 minutes)
+- Anchored query makes it efficient — only fetches what's new
 
-### HealthKit Query Pattern
+**2. Background task (fallback)** — runs daily via iOS Background Tasks (~midnight):
 
-The app queries HealthKit **per type** — this is how Apple's API works (no "give me everything" call):
+- Same sync engine, same anchored queries
+- Catches data when user hasn't opened the app
+- Handles multi-day catch-up automatically (anchors track position, not dates)
 
-```swift
-// Generic query — same pattern for every type
-func rawSamples(type: HKSampleType, date: Date) async throws -> [RawSample] {
-    let predicate = HKQuery.predicateForSamples(
-        withStart: date.startOfDay,
-        end: date.endOfDay
-    )
-    let descriptor = HKSampleQueryDescriptor(
-        predicates: [.sample(type: type, predicate: predicate)],
-        sortDescriptors: [SortDescriptor(\.startDate)]
-    )
-    let results = try await descriptor.result(for: healthStore)
-    return results.map { RawSample(from: $0) }
-}
+Both triggers call the same `sync()` function. The anchor ensures no duplicate samples regardless of how or when sync is triggered.
 
-// Called for each enabled type, results merged into one daily file
-func exportDay(_ date: Date) async throws -> DailyExport {
-    let allSamples = try await withThrowingTaskGroup(of: [RawSample].self) { group in
-        for type in enabledTypes {
-            group.addTask { try await self.rawSamples(type: type, date: date) }
-        }
-        return try await group.reduce(into: []) { $0 += $1 }
-    }.sorted { $0.start < $1.start }
+### Future: HKObserverQuery (Optional)
 
-    return DailyExport(date: date, exportedAt: .now, samples: allSamples)
-}
-```
+`HKObserverQuery` can notify the app when new HealthKit data arrives, enabling near-real-time sync. This is an optional enhancement — the foreground + background sync covers most use cases. If added later, the observer would simply be another trigger calling the same `sync()` engine.
 
-### Backend API (New)
+Note: Apple throttles background observer delivery (hourly for most types, immediate for workouts/sleep).
 
-The app uses the existing `PUT /raw/*path` endpoint to write daily JSON files directly to the life-db filesystem. No new backend API needed.
+### Backend API
+
+The app uses the existing `PUT /raw/*path` endpoint to write sync files directly to the life-db filesystem. No new backend API needed.
 
 ```
-PUT /raw/imports/fitness/apple-health/raw/2025/01/2025-01-15.json
+PUT /raw/imports/fitness/apple-health/raw/2025/01/15/2025-01-15T08-30-00Z.json
 Content-Type: application/json
 
-{ "date": "2025-01-15", "exported_at": "...", "samples": [...] }
+{ "synced_at": "...", "device_info": {...}, "samples": [...] }
 ```
+
+A single sync may produce multiple PUTs if samples span multiple days (e.g., late-arriving watch data).
 
 ## Privacy
 
