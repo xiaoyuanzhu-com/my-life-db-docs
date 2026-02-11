@@ -27,8 +27,11 @@ Data from HealthKit (requires user permission).
 | Resting Energy | Basal metabolic calories | iOS, watch | HealthKit | available |
 | Exercise Minutes | Time spent in activity | iOS, watch | HealthKit | available |
 | Stand Hours | Hours with standing activity | watch | HealthKit | available |
-| Heart Rate | Current, resting, walking average | iOS, watch | HealthKit | available |
-| Heart Rate Variability | HRV — best single stress/recovery metric | watch | HealthKit | available |
+| Heart Rate | BPM readings; metadata includes motion context (sedentary/active) | iOS, watch | HealthKit | available |
+| Resting Heart Rate | Daily resting HR, auto-computed by Apple | watch | HealthKit | available |
+| Walking Heart Rate Avg | Average HR while walking, auto-computed by Apple | watch | HealthKit | available |
+| Heart Rate Recovery | BPM drop 1 min after workout ends (iOS 16+) | watch | HealthKit | available |
+| Heart Rate Variability | HRV (SDNN) — best single stress/recovery metric | watch | HealthKit | available |
 | Blood Oxygen (SpO2) | Blood oxygen saturation | watch | HealthKit | available |
 | Respiratory Rate | Breaths per minute during sleep | watch | HealthKit | available |
 | Body Temperature | Wrist temperature deviation | watch | HealthKit | available |
@@ -297,6 +300,21 @@ Every HealthKit sample — regardless of type — shares the same core shape:
 }
 ```
 
+**Quantity samples with metadata** — heart rate includes motion context:
+```json
+{
+  "type": "HKQuantityTypeIdentifierHeartRate",
+  "start": "2025-01-15T07:35:12Z",
+  "end": "2025-01-15T07:35:12Z",
+  "value": 155,
+  "unit": "count/min",
+  "source": "com.apple.health.9A1B2C",
+  "device": "Apple Watch Series 9",
+  "metadata": { "HKHeartRateMotionContext": 2 }
+}
+```
+> `HKHeartRateMotionContext`: `0` = notSet, `1` = sedentary, `2` = active (during workout)
+
 **Category samples** (sleep, standing, etc.) — `value` is an integer enum:
 ```json
 {
@@ -417,7 +435,15 @@ Samples are sorted by `start` time. All types are mixed together in a single chr
     "HKQuantityTypeIdentifierRestingHeartRate": { "name": "Resting Heart Rate", "unit": "count/min" },
     "HKQuantityTypeIdentifierWalkingHeartRateAverage": { "name": "Walking Heart Rate Avg", "unit": "count/min" },
     "HKQuantityTypeIdentifierAppleExerciseTime": { "name": "Exercise Minutes", "unit": "min" },
-    "HKQuantityTypeIdentifierBasalEnergyBurned": { "name": "Resting Energy", "unit": "kcal" }
+    "HKQuantityTypeIdentifierBasalEnergyBurned": { "name": "Resting Energy", "unit": "kcal" },
+    "HKQuantityTypeIdentifierHeartRateRecoveryOneMinute": { "name": "Heart Rate Recovery (1 min)", "unit": "count/min" }
+  },
+  "metadata_enums": {
+    "HKHeartRateMotionContext": {
+      "name": "Heart Rate Motion Context",
+      "key": "HKMetadataKeyHeartRateMotionContext",
+      "values": { "0": "notSet", "1": "sedentary", "2": "active" }
+    }
   },
   "category_types": {
     "HKCategoryTypeIdentifierSleepAnalysis": {
