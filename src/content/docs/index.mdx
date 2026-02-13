@@ -5,11 +5,11 @@ template: splash
 hero:
   tagline: Folders and files, that's it. Zero vendor lock-in, your data lives in standard files.
   actions:
+    - text: Installation
+      link: /installation/
+      icon: right-arrow
     - text: Architecture
       link: /architecture/overview/
-      icon: right-arrow
-    - text: API Reference
-      link: /api/reference/
       icon: external
       variant: minimal
 ---
@@ -19,6 +19,9 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 ## Documentation
 
 <CardGrid stagger>
+	<Card title="Installation" icon="download">
+		Get MyLifeDB running with Docker in a few minutes.
+	</Card>
 	<Card title="Architecture" icon="setting">
 		System overview, backend architecture, and component reference.
 	</Card>

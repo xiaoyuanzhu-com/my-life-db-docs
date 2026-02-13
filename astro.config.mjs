@@ -12,6 +12,10 @@ export default defineConfig({
 			social: [],
 			sidebar: [
 				{
+					label: 'Installation',
+					link: '/installation/',
+				},
+				{
 					label: 'Architecture',
 					autogenerate: { directory: 'architecture' },
 				},
