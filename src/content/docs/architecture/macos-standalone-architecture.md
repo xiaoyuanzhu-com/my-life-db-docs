@@ -1,4 +1,6 @@
-# macOS Standalone Architecture
+---
+title: macOS Standalone Architecture
+---
 
 ## System Overview
 
