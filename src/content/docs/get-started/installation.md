@@ -1,5 +1,7 @@
 ---
 title: "Installation"
+sidebar:
+  order: 1
 ---
 
 MyLifeDB runs as a Docker container. This guide gets you up and running in a few minutes.

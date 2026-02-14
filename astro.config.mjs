@@ -12,8 +12,8 @@ export default defineConfig({
 			social: [],
 			sidebar: [
 				{
-					label: 'Installation',
-					link: '/installation/',
+					label: 'Get Started',
+					autogenerate: { directory: 'get-started' },
 				},
 				{
 					label: 'Architecture',
