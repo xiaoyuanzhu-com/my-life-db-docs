@@ -16,32 +16,37 @@ export default defineConfig({
 					autogenerate: { directory: 'get-started' },
 				},
 				{
-					label: 'Architecture',
-					autogenerate: { directory: 'architecture' },
-				},
-				{
-					label: 'Components',
-					autogenerate: { directory: 'components' },
-				},
-				{
-					label: 'API',
-					autogenerate: { directory: 'api' },
-				},
-				{
-					label: 'Features',
-					autogenerate: { directory: 'features' },
-				},
-				{
-					label: 'Claude Code',
-					autogenerate: { directory: 'claude-code' },
-				},
-				{
-					label: 'Apple Client',
-					autogenerate: { directory: 'apple-client' },
-				},
-				{
-					label: 'Design',
-					autogenerate: { directory: 'design' },
+					label: 'Internal',
+					items: [
+						{
+							label: 'Architecture',
+							autogenerate: { directory: 'internal/architecture' },
+						},
+						{
+							label: 'Components',
+							autogenerate: { directory: 'internal/components' },
+						},
+						{
+							label: 'API',
+							autogenerate: { directory: 'internal/api' },
+						},
+						{
+							label: 'Features',
+							autogenerate: { directory: 'internal/features' },
+						},
+						{
+							label: 'Claude Code',
+							autogenerate: { directory: 'internal/claude-code' },
+						},
+						{
+							label: 'Apple Client',
+							autogenerate: { directory: 'internal/apple-client' },
+						},
+						{
+							label: 'Design',
+							autogenerate: { directory: 'internal/design' },
+						},
+					],
 				},
 			],
 		}),
