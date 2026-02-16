@@ -43,42 +43,53 @@ sequenceDiagram
 
 ## Working State Detection
 
-The client can determine if Claude is actively working by tracking message patterns:
+The client determines if Claude is actively working using **explicit turn tracking** with two mechanisms:
 
-**Working indicators**:
-- **Progress messages** (`type: "progress"`) - Tool execution in progress
-- **Incomplete conversation** - User message sent but no final assistant response yet
-- **Multiple assistant messages in sequence** - Claude is still generating (tool calls, thinking, final response)
+1. **Live turn tracking** — `turnInProgress` state is set `true` when the user sends a message (`sendMessage()`), and set `false` when a `result` message arrives on the WebSocket stream.
+2. **One-shot initial detection** — when opening a session that is already mid-turn, `turnInProgress` defaults to `false`. After the initial message replay completes (500ms debounce), the client detects mid-turn state from the replayed messages.
 
-**Idle indicators**:
-- **Queue operation** (`type: "queue-operation", operation: "dequeue"`) - Claude finished processing and returned to prompt
-- **Final assistant message** - Last message is assistant text (no tool calls)
+Final derivation: `isWorking = optimisticMessage != null || turnInProgress`
 
-**Frontend implementation**:
+**Key message signals**:
+
+| Message | Meaning | Persisted to JSONL? |
+|---------|---------|---------------------|
+| `init` (`type: "system"`, `subtype: "init"`) | Session has a running Claude process (live, not historical) | No — stdout only |
+| `result` (`type: "result"`) | Turn completed (success or error) | No — stdout only |
+| `user` (non-tool-result) | User sent a real message, starting a turn | Yes |
+
+**Initial detection algorithm** (runs once after message replay):
+
 ```typescript
-// Track working state
-let isWorking = false
-let lastMessageType = null
-let lastAssistantHasToolCalls = false
+// After initial WebSocket message replay completes (500ms debounce):
 
-ws.onmessage = (event) => {
-  const msg = JSON.parse(event.data)
+// 1. Check for init message → live session with running process
+const hasInit = rawMessages.some(
+  (m) => m.type === 'system' && m.subtype === 'init'
+)
+if (!hasInit) return // Historical/dead session — not working
 
-  if (msg.type === 'user') {
-    isWorking = true // User sent message, Claude will respond
-  } else if (msg.type === 'progress') {
-    isWorking = true // Tool executing
-  } else if (msg.type === 'assistant') {
-    const hasToolCalls = msg.message.content?.some(b => b.type === 'tool_use')
-    lastAssistantHasToolCalls = hasToolCalls
-    isWorking = hasToolCalls // Still working if tool calls present
-  } else if (msg.type === 'queue-operation' && msg.operation === 'dequeue') {
-    isWorking = false // Claude returned to prompt, done working
+// 2. Scan backward: user message before result → mid-turn
+for (let i = rawMessages.length - 1; i >= 0; i--) {
+  const msg = rawMessages[i]
+  if (msg.type === 'result') break        // Turn completed, not working
+  if (msg.type === 'user' && !isToolResult(msg)) {
+    turnInProgress = true                  // Turn started, no result yet → working
+    break
   }
-
-  setIsStreaming(isWorking)
 }
 ```
+
+**Edge cases**:
+
+| Scenario | `init` present? | Detection result | Why |
+|----------|----------------|------------------|-----|
+| Historical session (no process) | No | Not working | No `init` → skip detection |
+| Active session, idle (waiting for input) | Yes | Not working | `result` found before any user message |
+| Active session, mid-turn | Yes | Working | User message found before `result` |
+| Killed session, reopened | No (new Session object) | Not working | No `init` in replay |
+| New session, only hooks ran | Yes | Not working | No user message in history |
+| Interrupted session | Yes | Not working | Claude emits `result` with `subtype: "error_during_execution"` |
 
 ---
 

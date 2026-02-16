@@ -183,36 +183,36 @@ Each session stores:
 
 ### Detecting Work-in-Progress State
 
-To determine if Claude is actively working on a session, check these signals:
+Working state is determined by **explicit turn tracking** in the frontend, not by inspecting message content or timestamps.
 
-| Signal | Indicates Completed |
-|--------|---------------------|
-| `result` message exists after last assistant message | Yes |
-| Assistant message has `stop_reason` (e.g., `"end_turn"`) | Yes |
-| Last message timestamp is stale (> 60 seconds old) | Yes (assume completed) |
+**Strategy:** The frontend tracks `turnInProgress` as an explicit boolean state:
+- Set `true` when user sends a message via `sendMessage()`
+- Set `false` when a `result` message arrives on the WebSocket stream
+- Final derivation: `isWorking = optimisticMessage != null || turnInProgress`
 
-**Case 1: Completed session (no `result`, no `stop_reason`, but stale)**
+**Initial detection (opening a session that is already mid-turn):**
 
-```json
-{
-  "messages": [
-    {"type": "queue-operation", "operation": "dequeue", "timestamp": "2026-01-22T14:16:23.027Z"},
-    {"type": "file-history-snapshot", "messageId": "60b658ab-..."},
-    {"type": "user", "uuid": "60b658ab-...", "message": {"role": "user", "content": "say hello"}, "timestamp": "2026-01-22T14:16:23.115Z"},
-    {"type": "assistant", "uuid": "c087e3e0-...", "message": {"role": "assistant", "content": [{"type": "text", "text": "Hello! How can I help you?"}], "stop_reason": null}, "timestamp": "2026-01-22T14:16:26.272Z"}
-  ]
-}
-```
+When a user opens a session where Claude is already working, `turnInProgress` defaults to `false`. After the initial WebSocket message replay completes (500ms debounce), a one-shot detection runs:
 
-This session is **NOT work-in-progress** because:
-- No `result` message
-- `stop_reason` is `null`
-- But timestamp is old (> 60 seconds ago) → **Completed**
+1. Check for `init` message (stdout-only, never in JSONL) — its presence means the session has a live running process
+2. If no `init` → historical/dead session → not working
+3. If `init` present → scan backward through messages: if a user message (non-tool-result) is found before a `result` message → turn is in progress → working
 
-**Only show WIP indicator when ALL conditions favor "working":**
-1. No `result` message after last assistant message
-2. No `stop_reason` in assistant message
-3. Message is recent (within last 60 seconds)
+**Key insight:** Both `init` and `result` messages are **stdout-only** (never persisted to JSONL). This means:
+- Historical sessions never have `init` in the message stream → always detected as "not working"
+- Only live sessions with a running process produce these messages
+- No heuristics, timestamps, or `stop_reason` inspection needed
+
+**Edge cases:**
+
+| Scenario | Result | Why |
+|----------|--------|-----|
+| Historical session (no process) | Not working | No `init` message in replay |
+| Active, idle (waiting for input) | Not working | `result` found before user message |
+| Active, mid-turn | Working | User message found before `result` |
+| Killed session, reopened | Not working | New Session object → no `init` |
+| New session, only hooks ran | Not working | No user message in history |
+| Interrupted session | Not working | Claude emits `result` with `subtype: "error_during_execution"` |
 
 ---
 

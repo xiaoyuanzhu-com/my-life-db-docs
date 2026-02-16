@@ -1695,94 +1695,65 @@ const { scrollRef, contentRef } = useStickToBottom({
 
 #### Working State Detection (`isWorking`)
 
-The UI needs to determine whether Claude is currently working (processing a request) to show appropriate indicators (spinner, "Working..." text, interrupt button). This state is derived from message history rather than tracked separately, enabling second tabs to correctly detect state.
+The UI shows whether Claude is currently working (spinner, "Working..." text, interrupt button). This is tracked with an explicit `turnInProgress` boolean state, combined with a one-shot detection for sessions opened mid-turn.
 
-**Option A: Turn-Based Detection (Current Implementation)**
+**File:** `frontend/app/components/claude/chat/chat-interface.tsx`
+
+**Final derivation:**
+```typescript
+const isWorking = optimisticMessage != null || turnInProgress
+```
+
+**Two mechanisms:**
+
+**1. Live turn tracking** — handles the normal send/receive flow:
+- `sendMessage()` → sets `turnInProgress = true`
+- `result` message received on WebSocket → sets `turnInProgress = false`
+- `optimisticMessage` covers the gap between user click and server echo
+
+**2. One-shot initial detection** — handles opening a session that is already mid-turn:
+
+When a user navigates to a session where Claude is currently processing, `turnInProgress` defaults to `false`. After the initial WebSocket message replay completes (500ms debounce), a one-shot detection runs:
 
 ```typescript
-const isWorking = useMemo(() => {
-  if (isActive === false) return false      // CLI not running
-  if (optimisticMessage) return true         // User just sent message
+useEffect(() => {
+  if (!initialLoadComplete || hasDetectedWorkingStateRef.current) return
+  hasDetectedWorkingStateRef.current = true
 
-  // Has a turn started? (real user message exists, not tool_result)
-  const hasStartedTurn = rawMessages.some(
-    (m) => m.type === 'user' && !hasToolUseResult(m)
+  // Only detect for live sessions (init = process is running)
+  const hasInit = rawMessages.some(
+    (m) => m.type === 'system' && m.subtype === 'init'
   )
-  if (!hasStartedTurn) return false          // No turn started = not working
+  if (!hasInit) return
 
-  // Turn started, check if complete
-  const lastMsg = rawMessages[rawMessages.length - 1]
-  return lastMsg?.type !== 'result'          // Turn not terminated
-}, [rawMessages, optimisticMessage, isActive])
-```
-
-**Rationale:** Working = a turn is in progress (started but not completed).
-- A turn **starts** when user sends a real message (not `tool_result`)
-- A turn **ends** when `result` message received
-
-**Reliability:**
-- Live sessions: 100% reliable - `result` always emitted when turn completes
-- Historical sessions: `isActive === false` check returns `false` immediately
-- New session with only hooks: `hasStartedTurn` is `false` → not working
-- Interrupted sessions: Claude emits `result` with `subtype: "error_during_execution"`
-
-The key insight: `result` messages are stdout-only (not persisted to JSONL), but this doesn't matter because historical sessions have `isActive === false`, so we never reach the `result` check.
-
-**Option B: Content Heuristics (Previous Implementation)**
-
-```typescript
-export function deriveIsWorking(messages: SessionMessage[]): boolean {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i]
-
-    // Skip metadata types (system, progress, result, summary, etc.)
-    if (SKIP_MESSAGE_TYPES.has(msg.type)) continue
-
-    // Skip tool result messages (automatic responses)
-    if (msg.type === 'user' && hasToolUseResult(msg)) continue
-
-    // Assistant ending with text = finished
-    if (msg.type === 'assistant' && msg.message?.content) {
-      const lastBlock = msg.message.content[msg.message.content.length - 1]
-      if (lastBlock?.type === 'text') return false
-      return true  // tool_use or thinking = working
+  // Scan backward: if we find a user message before a result, turn is in progress
+  for (let i = rawMessages.length - 1; i >= 0; i--) {
+    const msg = rawMessages[i]
+    if (msg.type === 'result') break        // Turn completed, not working
+    if (msg.type === 'user' && !hasToolUseResult(msg)) {
+      setTurnInProgress(true)               // Turn started, no result yet
+      break
     }
-
-    // User message pending = working
-    if (msg.type === 'user') return true
   }
-  return false
-}
+}, [initialLoadComplete, rawMessages])
 ```
 
-**Rationale:** Infers state by inspecting conversation structure - if last assistant message ends with text, Claude is done; if it ends with tool_use, Claude is still executing.
+**Key insight:** Both `init` and `result` messages are **stdout-only** — never persisted to JSONL. This naturally separates live sessions (which have these messages in the WebSocket stream) from historical sessions (which don't).
 
-**Reliability:**
-- Historical sessions: Works correctly since it only needs persisted message content
-- Heuristic-based: Assumes "text at end = done" which may not hold for all Claude Code behaviors
-- Content block inspection: Fragile if message structure changes
-- Requires `isActive` check externally (function doesn't know about session state)
+**Edge cases:**
 
-**Comparison Table:**
+| Scenario | `init` present? | Result | Why |
+|----------|----------------|--------|-----|
+| Historical session (no process) | No | Not working | No `init` → skip detection entirely |
+| Active session, idle (waiting for input) | Yes | Not working | `result` found before any user message |
+| Active session, mid-turn | Yes | Working | User message found before `result` |
+| Killed session, reopened | No (new Session object) | Not working | Fresh Session → no `init` in replay |
+| New session, only hooks ran | Yes | Not working | No user message in history |
+| Interrupted session | Yes | Not working | Claude emits `result` with `subtype: "error_during_execution"` |
+| User sends message (normal flow) | N/A | Working | `sendMessage()` sets `turnInProgress = true` |
+| Claude finishes turn (normal flow) | N/A | Not working | `result` handler sets `turnInProgress = false` |
 
-| Scenario | Option A (turn-based) | Option B (heuristics) |
-|----------|----------------------|----------------------|
-| New session, only hooks | correct (`hasStartedTurn` guard) | correct |
-| Live session, turn complete | correct | correct |
-| Live session, mid-turn | correct | correct |
-| Live session, interrupted | correct (`result` with `subtype: "error_during_execution"`) | correct |
-| Historical session loaded | correct (`isActive` guard) | correct |
-| Streaming: text arrived, no result yet | shows "working" (transient) | shows "idle" |
-| New/unknown message types | safe default | may misdetect |
-
-**Current Decision:** Using Option A.
-
-- Both options are reliable for the common cases
-- Option A uses explicit signals (`result` message, turn start detection) rather than inferring from content structure
-- New sessions with only hook messages correctly show "not working"
-- Interrupted sessions work correctly - Claude emits `result` with `subtype: "error_during_execution"` (verified)
-- The "streaming text, no result yet" case is transient (milliseconds) and not user-visible
-- Option A is more robust to future changes in message structure
+**Evolution note:** This logic has been revised multiple times. Previous approaches included content heuristics (inspecting last assistant message block type), multi-signal checks (`stop_reason`, stale timestamps), and `useMemo`-based derivation with `isActive` guards. All were replaced because they were fragile against edge cases. The current approach uses only explicit protocol signals (`init` and `result`) and avoids inspecting message content.
 
 ### 6.7 Component Structure & Directory Organization
 
