@@ -40,12 +40,14 @@ src/content/docs/
 
 ## Git Workflow
 
-Prefer using **git worktrees** for code changes to avoid conflicts with concurrent sessions:
+**Always use git worktrees** for code changes — no exceptions, even for small changes. Never commit directly on `main`. **Create the worktree first, before making any code changes.** All edits happen inside the worktree directory.
 
+    # 1. create worktree BEFORE making changes
     git worktree add -b <branch> .worktrees/<name> main
-    # work and commit on the branch, then merge when done
+    # 2. make all edits inside .worktrees/<name>/, then commit there
+    # 3. merge back to main and push
     git checkout main && git pull && git merge <branch> && git push
-    # clean up
+    # 4. clean up
     git worktree remove .worktrees/<name> && git branch -d <branch>
 
 ## Naming Conventions
