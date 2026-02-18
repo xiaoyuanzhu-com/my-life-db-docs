@@ -185,34 +185,34 @@ Each session stores:
 
 Working state is determined by **explicit turn tracking** in the frontend, not by inspecting message content or timestamps.
 
-**Strategy:** The frontend tracks `turnInProgress` as an explicit boolean state:
-- Set `true` when user sends a message via `sendMessage()`
-- Set `false` when a `result` message arrives on the WebSocket stream
+**Strategy:** The `init` and `result` messages from Claude CLI stdout act as natural on/off signals for `turnInProgress`:
+
+- `init` message arrives → `turnInProgress = true` (turn started)
+- `result` message arrives → `turnInProgress = false` (turn completed)
+- User sends message via `sendMessage()` → `turnInProgress = true`
 - Final derivation: `isWorking = optimisticMessage != null || turnInProgress`
 
-**Initial detection (opening a session that is already mid-turn):**
+**How it works when opening a mid-turn session:**
 
-When a user opens a session where Claude is already working, `turnInProgress` defaults to `false`. After the initial WebSocket message replay completes (500ms debounce), a one-shot detection runs:
-
-1. Check for `init` message (stdout-only, never in JSONL) — its presence means the session has a live running process
-2. If no `init` → historical/dead session → not working
-3. If `init` present → scan backward through messages: if a user message (non-tool-result) is found before a `result` message → turn is in progress → working
+When a user opens a session where Claude is already working, the backend replays all cached messages via WebSocket. During replay, each completed turn produces an `init`/`result` pair that toggles `turnInProgress` true→false. For the current mid-turn, `init` sets it to `true` with no subsequent `result` to clear it — so the UI correctly shows "working".
 
 **Key insight:** Both `init` and `result` messages are **stdout-only** (never persisted to JSONL). This means:
-- Historical sessions never have `init` in the message stream → always detected as "not working"
+- Historical sessions never have `init` in the message stream → `turnInProgress` stays at default `false`
 - Only live sessions with a running process produce these messages
-- No heuristics, timestamps, or `stop_reason` inspection needed
+- No heuristics, timestamps, debounce timers, or backward scanning needed
 
 **Edge cases:**
 
 | Scenario | Result | Why |
 |----------|--------|-----|
-| Historical session (no process) | Not working | No `init` message in replay |
-| Active, idle (waiting for input) | Not working | `result` found before user message |
-| Active, mid-turn | Working | User message found before `result` |
-| Killed session, reopened | Not working | New Session object → no `init` |
-| New session, only hooks ran | Not working | No user message in history |
-| Interrupted session | Not working | Claude emits `result` with `subtype: "error_during_execution"` |
+| Historical session (no process) | Not working | No `init` in JSONL → no state change |
+| Active, idle (waiting for input) | Not working | `init` sets true, `result` sets false |
+| Active, mid-turn | Working | `init` sets true, no `result` follows |
+| Active, subagent streaming | Working | Same — `init` sets true immediately, unaffected by message frequency |
+| Killed session, reopened | Not working | New Session object → cache cleared → no `init` |
+| New session, only hooks ran | Not working | `init` sets true, `result` sets false |
+| Interrupted session | Not working | `init` sets true, `result` (subtype `error_during_execution`) sets false |
+| WebSocket reconnect mid-turn | Working | `init` re-sent from cache → sets true again |
 
 ---
 
