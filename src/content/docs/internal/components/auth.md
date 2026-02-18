@@ -216,6 +216,56 @@ Clients typically expose a simple auth state to the UI:
 
 Transitions: `unknown` → `checking` → `authenticated` or `unauthenticated`. The API layer's refresh failure triggers `authenticated` → `unauthenticated`.
 
+### SSE / long-lived connections
+
+SSE endpoints like `/api/notifications/stream` are protected by the same `AuthMiddleware` — auth is validated **once** when the connection is established. These connections differ from normal API calls in two important ways:
+
+1. **No mid-stream 401.** The middleware checks auth before the handler runs. If the token is expired, the client receives a 401 and the SSE stream never opens. There is no in-band auth error during an active stream.
+2. **No automatic retry-with-refresh.** Unlike `fetchWithRefresh` where the wrapper can intercept a 401, retry refresh, and replay the request transparently, SSE connections must handle auth failure in the reconnect logic.
+
+#### Web clients (EventSource)
+
+Use **cookie-based auth only** — never pass tokens as query parameters. The browser's `EventSource` reuses the URL on reconnect; a stale token baked into the query string causes infinite 401 loops.
+
+```typescript
+// Correct — cookie is sent automatically and updates after refresh
+const es = new EventSource('/api/notifications/stream');
+
+// Wrong — stale token baked into URL
+const es = new EventSource(`/api/notifications/stream?token=${token}`);
+```
+
+Per the [WHATWG spec](https://html.spec.whatwg.org/multipage/server-sent-events.html), `EventSource` does **not** auto-reconnect on HTTP errors (only on connection drops after a successful 200). A 401 sets `readyState = CLOSED` and fires `onerror` once. The client must manage reconnection:
+
+```
+onerror fires → close EventSource → refresh token → wait (with backoff) → create new EventSource
+```
+
+#### Native clients (URLSession / OkHttp)
+
+Native HTTP clients receive the full HTTP response before streaming starts. The delegate/callback **must check the status code** before treating the connection as successful:
+
+```
+didReceive response:
+  → if 401: reject (don't reset backoff)
+  → if 200: accept, reset backoff
+```
+
+:::caution
+A common bug: resetting the reconnect backoff on *any* HTTP response (including 401). This defeats exponential backoff and produces rapid-fire retry loops — the server sees ~1 request/second indefinitely.
+:::
+
+#### Reconnect backoff requirements
+
+All clients must implement exponential backoff on SSE reconnection failure:
+
+| Client | Base delay | Backoff | Cap | Reset on |
+|--------|-----------|---------|-----|----------|
+| Web (EventSource) | 5s | 2× | 60s | Successful `onopen` or visibility change |
+| Native (URLSession) | 1s | 2× | 30s | Successful 200 response |
+
+The reconnect cycle should attempt a token refresh before each retry, but must still apply backoff regardless of whether the refresh succeeded.
+
 ## Hybrid App Auth (Native + WebView)
 
 Native apps that embed WebViews (iOS, Android, desktop) need auth in **two networking stacks**: native HTTP client (for native API calls) and the WebView (for embedded web content). The recommended pattern is **cookie injection** — native owns all tokens and injects them as cookies into the WebView's cookie store.
