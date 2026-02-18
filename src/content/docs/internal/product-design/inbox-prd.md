@@ -174,18 +174,42 @@ Each file type renders with a specialized inline preview card:
 
 | Type | Viewer | Key Features |
 |------|--------|-------------|
-| **Image** | Native image viewer | Pinch-to-zoom, double-tap zoom, pan when zoomed in |
+| **Image** | Native image viewer | Two-finger pinch-to-zoom, double-tap to zoom, single tap to dismiss, pan when zoomed in |
 | **Video** | Native video player | Standard playback controls, auth header injection |
 | **Audio** | Audio player | Waveform icon, playback controls, filename display |
 | **PDF** | PDF viewer | PDFKit (iOS) / native renderer, auto-scaling, continuous scroll |
 | **Text** | Text viewer | Monospace font, text selection, scroll for long content |
 | **Other** | Metadata view | File icon, name, size, MIME type, extension, dates |
 
-**Media pager (iOS):**
+**Image gestures:**
+
+| Gesture | Action |
+|---------|--------|
+| Two-finger pinch | Zoom in/out |
+| Single tap | Dismiss preview |
+| Double tap | Toggle zoom |
+| Swipe right | Previous media file (image or video) |
+| Swipe left | Next media file (image or video) |
+
+**Thumbnail → Full-Screen Transition:**
+
+Tapping a thumbnail opens the full-screen viewer with a **zoom transition** — the image visually expands from the card into the viewer, giving spatial continuity. Dismissing reverses the animation.
+
+| Aspect | Requirement |
+|--------|-------------|
+| **Open** | Image expands from card position/size to full-screen center; black backdrop fades in simultaneously |
+| **Dismiss** | Reverse — image shrinks back to card position; backdrop fades out |
+| **Corner radius** | Animate from card's rounded corners to zero (full-screen) |
+| **Duration** | 250–350ms, ease-out feel |
+| **Fallback** | If the source card is unavailable (e.g. scrolled off-screen, image not loaded), use a simple center-scale + fade instead |
+
+> Implementation is platform-specific — use the idiomatic matched-geometry / hero-animation API available on each platform.
+
+**Media pager:**
 - Horizontal swipe between images and videos only
 - Non-media files open as single viewer (no paging)
 - Infinite scroll: loads older media items when approaching end
-- Zoom animation: matched geometry from card to full-screen
+- The zoom animation only plays for the *first* file opened; subsequent swipe transitions use a 150ms crossfade
 
 **Navigation (Web):**
 - Keyboard: ← / → for previous/next file
