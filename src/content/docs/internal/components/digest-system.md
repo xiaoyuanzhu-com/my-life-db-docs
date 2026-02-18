@@ -6,33 +6,34 @@ The digest system processes files to extract content, metadata, generate preview
 
 ## Architecture
 
-```
-File Change Event (inbox only)
-    |
-Digest Worker (3 parallel goroutines)
-    |
-Digester Registry (15 digesters in order)
-    |
-+------------------------------------------------+
-| Phase 1: Content Extraction                    |
-+------------------------------------------------+
-| URLCrawl, DocToMarkdown, DocToScreenshot,      |
-| ImagePreview, ImageOCR, ImageCaptioning,       |
-| ImageObjects, SpeechRecognition                |
-+------------------------------------------------+
-| Phase 2: Secondary Processing                  |
-+------------------------------------------------+
-| URLCrawlSummary, SpeechRecognitionCleanup,     |
-| SpeechRecognitionSummary, SpeakerEmbedding     |
-+------------------------------------------------+
-| Phase 3: Tags and Search                       |
-+------------------------------------------------+
-| Tags, SearchKeyword, SearchSemantic            |
-+------------------------------------------------+
-    |
-Store results in database
-    |
-Notify UI via SSE (for previews)
+```mermaid
+graph TD
+    FCE["File Change Event (inbox only)"] --> DW["Digest Worker\n(3 parallel goroutines)"]
+    DW --> DR["Digester Registry\n(15 digesters in order)"]
+
+    DR --> P1
+
+    subgraph P1["Phase 1: Content Extraction"]
+        URLCrawl & DocToMarkdown & DocToScreenshot
+        ImagePreview & ImageOCR & ImageCaptioning
+        ImageObjects & SpeechRecognition
+    end
+
+    P1 --> P2
+
+    subgraph P2["Phase 2: Secondary Processing"]
+        URLCrawlSummary & SpeechRecognitionCleanup
+        SpeechRecognitionSummary & SpeakerEmbedding
+    end
+
+    P2 --> P3
+
+    subgraph P3["Phase 3: Tags and Search"]
+        Tags & SearchKeyword & SearchSemantic
+    end
+
+    P3 --> DB["Store results in database"]
+    DB --> SSE["Notify UI via SSE (for previews)"]
 ```
 
 ## Key Components

@@ -6,13 +6,16 @@ The notifications service provides real-time updates to the frontend via Server-
 
 ## Architecture
 
-```
-Backend Components                Notifications Service              Browser
-      |                                    |                            |
-      |-- NotifyInboxChanged() ----------->|                            |
-      |                                    |-- broadcast --------------->|
-      |-- NotifyPreviewUpdated() --------->|    (SSE)                   |
-      |                                    |-- broadcast --------------->|
+```mermaid
+sequenceDiagram
+    participant BC as Backend Components
+    participant NS as Notifications Service
+    participant BR as Browser
+
+    BC->>NS: NotifyInboxChanged()
+    NS->>BR: broadcast (SSE)
+    BC->>NS: NotifyPreviewUpdated()
+    NS->>BR: broadcast (SSE)
 ```
 
 ## Key Components

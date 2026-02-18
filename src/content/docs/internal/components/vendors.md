@@ -6,14 +6,14 @@ The vendors package provides clients for external services used by the applicati
 
 ## Architecture
 
-```
-vendors/
-+-- openai.go          # OpenAI API (completions, embeddings, vision)
-+-- openai_prompts.go  # Prompt templates
-+-- qdrant.go          # Qdrant vector database
-+-- meilisearch.go     # Meilisearch full-text search
-+-- haid.go            # HAID service (OCR, documents, embeddings)
-+-- aliyun.go          # Aliyun real-time ASR
+```mermaid
+graph LR
+    V["vendors/"] --> openai["openai.go\nOpenAI API (completions, embeddings, vision)"]
+    V --> prompts["openai_prompts.go\nPrompt templates"]
+    V --> qdrant["qdrant.go\nQdrant vector database"]
+    V --> meili["meilisearch.go\nMeilisearch full-text search"]
+    V --> haid["haid.go\nHAID service (OCR, documents, embeddings)"]
+    V --> aliyun["aliyun.go\nAliyun real-time ASR"]
 ```
 
 ## Service Overview

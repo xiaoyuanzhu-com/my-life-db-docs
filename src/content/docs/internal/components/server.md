@@ -6,25 +6,16 @@ The Server struct owns and coordinates all application components, managing thei
 
 ## Architecture
 
-```
-                         Server
-                           |
-    +-----------------------+----------------------+
-    |                      |                      |
-    v                      v                      v
- database            fsService              digestWorker
- (*db.DB)            (*fs.Service)          (*digest.Worker)
-    |                      |                      |
-    |                      |    callback          |
-    |                      +----------------------+
-    |                             |
-    |                      notifService
-    |                      (*notifications.Service)
-    |                             |
-    +-----------------------------+
-                    |
-               HTTP Router
-               (*gin.Engine)
+```mermaid
+graph TD
+    Server --> database["database\n(*db.DB)"]
+    Server --> fsService["fsService\n(*fs.Service)"]
+    Server --> digestWorker["digestWorker\n(*digest.Worker)"]
+    fsService -- callback --> digestWorker
+    fsService --> notifService["notifService\n(*notifications.Service)"]
+    digestWorker --> notifService
+    database --> Router["HTTP Router\n(*gin.Engine)"]
+    notifService --> Router
 ```
 
 ## Key Components

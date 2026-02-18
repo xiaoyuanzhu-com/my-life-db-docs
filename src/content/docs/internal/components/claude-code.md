@@ -18,12 +18,10 @@ The backend acts as a transparent relay between Claude CLI and the browser. When
 
 ## Architecture Overview
 
-```
-Browser (React)
-    | WebSocket
-Backend (Go)
-    | SDK Client (subprocess wrapper)
-Claude CLI
+```mermaid
+graph TD
+    Browser["Browser (React)"] -- WebSocket --> Backend["Backend (Go)"]
+    Backend -- "SDK Client (subprocess wrapper)" --> Claude["Claude CLI"]
 ```
 
 ### Two Operation Modes
@@ -233,18 +231,19 @@ func (m *messageWithRaw) MarshalJSON() ([]byte, error) {
 
 Claude requests tool permissions via `control_request` messages. This creates a sync->async bridge:
 
-```
-Claude CLI (sync)              Backend                    Browser (async)
-      |                           |                            |
-      |-- control_request ------->|                            |
-      |   (blocks waiting)        |-- broadcast --------------->|
-      |                           |                            |
-      |                           |    User sees permission UI |
-      |                           |    User clicks Allow/Deny  |
-      |                           |                            |
-      |                           |<-- control_response -------|
-      |<-- response --------------|                            |
-      |   (unblocks)              |                            |
+```mermaid
+sequenceDiagram
+    participant CLI as Claude CLI (sync)
+    participant BE as Backend
+    participant BR as Browser (async)
+
+    CLI->>BE: control_request
+    Note over CLI: blocks waiting
+    BE->>BR: broadcast
+    Note over BR: User sees permission UI<br/>User clicks Allow/Deny
+    BR->>BE: control_response
+    BE->>CLI: response
+    Note over CLI: unblocks
 ```
 
 ### Permission Response Structure
@@ -495,18 +494,13 @@ The session list auto-refreshes when session state changes.
 
 ### How It Works
 
-```
-Claude CLI writes JSONL
-    |
-SessionManager (fsnotify watcher) -- only notifies if DisplayTitle changed
-    |
-SessionManager.notify() -- emits SessionEvent to subscribers
-    |
-Server subscription callback -- calls NotifyClaudeSessionUpdated()
-    |
-SSE "claude-session-updated" event
-    |
-Frontend calls loadSessions()
+```mermaid
+graph TD
+    A["Claude CLI writes JSONL"] --> B["SessionManager (fsnotify watcher)\nonly notifies if DisplayTitle changed"]
+    B --> C["SessionManager.notify()\nemits SessionEvent to subscribers"]
+    C --> D["Server subscription callback\ncalls NotifyClaudeSessionUpdated()"]
+    D --> E["SSE 'claude-session-updated' event"]
+    E --> F["Frontend calls loadSessions()"]
 ```
 
 **Key point**: The backend filters out most file writes. Only meaningful changes (title, new sessions) trigger notifications, so no debouncing needed on frontend.
@@ -554,23 +548,13 @@ Node.js CLI tools typically handle SIGINT (Ctrl+C) for interactive use but don't
 
 ### Shutdown Flow
 
-```
-User clicks "Deactivate" or Server receives shutdown signal
-    |
-SessionManager.DeactivateSession() or Shutdown()
-    |
-cleanupSession(session)
-    |
-+-------------------------------------+
-| SDK Mode (session.sdkClient != nil) |
-|   -> sdkClient.Close()              |
-|   -> transport.Close()              |
-|   -> SIGINT + 3s timeout + SIGKILL  |
-+-------------------------------------+
-| PTY Mode (legacy CLI)               |
-|   -> gracefulTerminate(cmd, 3s)     |
-|   -> SIGINT + 3s timeout + SIGKILL  |
-+-------------------------------------+
+```mermaid
+graph TD
+    A["User clicks 'Deactivate' or\nServer receives shutdown signal"] --> B["SessionManager.DeactivateSession()\nor Shutdown()"]
+    B --> C["cleanupSession(session)"]
+    C --> D{"Mode?"}
+    D -- "SDK Mode\n(sdkClient != nil)" --> E["sdkClient.Close()\ntransport.Close()\nSIGINT + 3s timeout + SIGKILL"]
+    D -- "PTY Mode\n(legacy CLI)" --> F["gracefulTerminate(cmd, 3s)\nSIGINT + 3s timeout + SIGKILL"]
 ```
 
 ### Testing

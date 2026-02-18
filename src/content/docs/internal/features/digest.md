@@ -52,11 +52,15 @@ type DigestStatus =
 
 ### State Transitions
 
-```
-todo → in-progress → completed (terminal)
-                   ↘ skipped (terminal)
-                   ↘ failed → todo (retry)
-                            ↘ failed (terminal, after 3 attempts)
+```mermaid
+stateDiagram-v2
+    [*] --> todo
+    todo --> in_progress: process
+    in_progress --> completed: success (terminal)
+    in_progress --> skipped: not applicable (terminal)
+    in_progress --> failed: error
+    failed --> todo: retry (< 3 attempts)
+    failed --> [*]: terminal (after 3 attempts)
 ```
 
 **Terminal States**:

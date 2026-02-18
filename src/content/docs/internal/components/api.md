@@ -6,18 +6,13 @@ The API layer provides 50+ HTTP endpoints for the frontend and external integrat
 
 ## Architecture
 
-```
-HTTP Request
-    |
-Gin Router
-    |
-Middleware Stack (recovery, logging, CORS, gzip)
-    |
-Handler Method (in Handlers struct)
-    |
-Access Server components via h.server.*()
-    |
-HTTP Response
+```mermaid
+graph TD
+    A["HTTP Request"] --> B["Gin Router"]
+    B --> C["Middleware Stack\n(recovery, logging, CORS, gzip)"]
+    C --> D["Handler Method\n(in Handlers struct)"]
+    D --> E["Access Server components\nvia h.server.*()"]
+    E --> F["HTTP Response"]
 ```
 
 ## Key Components

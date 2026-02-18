@@ -1832,12 +1832,12 @@ Stream events contain Anthropic API streaming events, enabling progressive text 
 ```
 
 **Threading**: Messages form a tree structure using `uuid` and `parentUuid`:
-```
-User Message (uuid: A, parentUuid: null)
-  ├─ Assistant Response (uuid: B, parentUuid: A)
-  │   ├─ Tool Call (uuid: C, parentUuid: B)
-  │   └─ Tool Result (uuid: D, parentUuid: C)
-  └─ Assistant Final (uuid: E, parentUuid: D)
+```mermaid
+graph TD
+    A["User Message\n(uuid: A, parentUuid: null)"] --> B["Assistant Response\n(uuid: B, parentUuid: A)"]
+    B --> C["Tool Call\n(uuid: C, parentUuid: B)"]
+    B --> D["Tool Result\n(uuid: D, parentUuid: C)"]
+    A --> E["Assistant Final\n(uuid: E, parentUuid: D)"]
 ```
 
 **Lifecycle**:

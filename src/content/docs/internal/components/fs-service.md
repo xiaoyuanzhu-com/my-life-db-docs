@@ -6,23 +6,20 @@ The FS service monitors the user's data directory for changes and triggers downs
 
 ## Architecture
 
-```
-User Data Directory
-    |
-+------------------------------------------+
-|             FS Service                   |
-+------------------------------------------+
-|  Watcher (fsnotify, real-time)           |
-|  Scanner (periodic, hourly)              |
-|  PathFilter (exclusion rules)            |
-|  Processor (metadata extraction)         |
-|  FileLock (per-file concurrency)         |
-+------------------------------------------+
-    |
-FileChangeEvent callback
-    |
-+-- Digest Worker (inbox files only)
-+-- Notifications Service
+```mermaid
+graph TD
+    UDD["User Data Directory"] --> FSS
+
+    subgraph FSS["FS Service"]
+        W["Watcher (fsnotify, real-time)"]
+        SC["Scanner (periodic, hourly)"]
+        PF["PathFilter (exclusion rules)"]
+        PR["Processor (metadata extraction)"]
+        FL["FileLock (per-file concurrency)"]
+    end
+
+    FSS -- FileChangeEvent callback --> DW["Digest Worker (inbox files only)"]
+    FSS -- FileChangeEvent callback --> NS["Notifications Service"]
 ```
 
 ## Key Components

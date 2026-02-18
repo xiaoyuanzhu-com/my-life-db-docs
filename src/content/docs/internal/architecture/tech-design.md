@@ -114,23 +114,22 @@ graph LR
 
 The application runs as a **single Node.js process** that handles both HTTP requests and background services:
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Node.js Process                          │
-│  ┌─────────────────┐  ┌──────────────────────────────────┐  │
-│  │  Express Server │  │     Background Services          │  │
-│  │  ─────────────  │  │  ────────────────────────────    │  │
-│  │  • API Routes   │  │  • FileSystemWatcher (chokidar)  │  │
-│  │  • SSR/Hydrate  │  │  • TaskWorker (polling loop)     │  │
-│  │  • Static Files │  │  • DigestSupervisor              │  │
-│  │                 │  │  • PeriodicScanner               │  │
-│  └─────────────────┘  └──────────────────────────────────┘  │
-│                              │                              │
-│                              ▼                              │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │                     SQLite (WAL)                     │   │
-│  └──────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph NodeProcess["Node.js Process"]
+        subgraph Express["Express Server"]
+            API["API Routes"]
+            SSR["SSR/Hydrate"]
+            Static["Static Files"]
+        end
+        subgraph Background["Background Services"]
+            FSW["FileSystemWatcher (chokidar)"]
+            TW["TaskWorker (polling loop)"]
+            DS["DigestSupervisor"]
+            PS["PeriodicScanner"]
+        end
+        Background --> SQLite["SQLite (WAL)"]
+    end
 ```
 
 **Why single process:**
@@ -208,17 +207,14 @@ Background services (file watcher, task worker, etc.) are long-running and don't
 
 The `FileSystemWatcher` detects file changes and broadcasts notifications via Server-Sent Events:
 
-```
-File saved → chokidar detects → upsert DB → notificationService.notify()
-                                                      │
-                                                      ▼
-                                          SSE stream → browser
-                                                      │
-                                                      ▼
-                                          useInboxNotifications hook
-                                                      │
-                                                      ▼
-                                          InboxFeed re-fetches data
+```mermaid
+graph LR
+    A["File saved"] --> B["chokidar detects"]
+    B --> C["upsert DB"]
+    C --> D["notificationService.notify()"]
+    D --> E["SSE stream → browser"]
+    E --> F["useInboxNotifications hook"]
+    F --> G["InboxFeed re-fetches data"]
 ```
 
 Notification types: `inbox-changed`, `pin-changed`

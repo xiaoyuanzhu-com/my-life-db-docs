@@ -26,34 +26,24 @@ Currently, `AskUserQuestion` uses custom message types (`question_request`/`ques
 
 ## Current Flow (To Be Removed)
 
-```
-Claude → tool_use (AskUserQuestion)
-    ↓
-SDK CanUseTool callback
-    ↓
-handleAskUserQuestion() creates question_request (CUSTOM)
-    ↓
-Frontend receives question_request, shows UI
-    ↓
-Frontend sends question_response (CUSTOM)
-    ↓
-Backend receives, unblocks callback with answers
+```mermaid
+graph TD
+    A["Claude → tool_use (AskUserQuestion)"] --> B["SDK CanUseTool callback"]
+    B --> C["handleAskUserQuestion() creates\nquestion_request (CUSTOM)"]
+    C --> D["Frontend receives question_request,\nshows UI"]
+    D --> E["Frontend sends\nquestion_response (CUSTOM)"]
+    E --> F["Backend receives,\nunblocks callback with answers"]
 ```
 
 ## Target Flow (Unified)
 
-```
-Claude → tool_use (AskUserQuestion)
-    ↓
-SDK CanUseTool callback
-    ↓
-Standard permission flow creates control_request with tool_name="AskUserQuestion"
-    ↓
-Frontend detects tool_name="AskUserQuestion", shows question UI (not permission UI)
-    ↓
-Frontend sends control_response with updatedInput containing answers
-    ↓
-Backend receives, returns PermissionResultAllow with UpdatedInput
+```mermaid
+graph TD
+    A["Claude → tool_use (AskUserQuestion)"] --> B["SDK CanUseTool callback"]
+    B --> C["Standard permission flow creates\ncontrol_request with tool_name='AskUserQuestion'"]
+    C --> D["Frontend detects tool_name='AskUserQuestion'\nshows question UI (not permission UI)"]
+    D --> E["Frontend sends control_response\nwith updatedInput containing answers"]
+    E --> F["Backend receives, returns\nPermissionResultAllow with UpdatedInput"]
 ```
 
 ## Changes Required

@@ -62,29 +62,22 @@ Two variants depending on whether the client can receive cookies directly.
 
 ### Cookie-based (web browsers)
 
-```
-Client                     Backend                    OIDC Provider
-  │                          │                            │
-  │── GET /api/oauth/authorize ──>                        │
-  │                          │                            │
-  │                          │  generate random state     │
-  │                          │  set oauth_state cookie    │
-  │                          │                            │
-  │<── 302 redirect ─────────│──────────────────────────> │
-  │                          │                            │
-  │                          │       user authenticates   │
-  │                          │                            │
-  │<─────────────────────────│<── callback with code ─────│
-  │                          │                            │
-  │  GET /api/oauth/callback │                            │
-  │  ?code=...&state=...     │                            │
-  │                          │── exchange code ──────────>│
-  │                          │<── access + refresh token ─│
-  │                          │                            │
-  │                          │  verify ID token           │
-  │                          │  validate username         │
-  │                          │                            │
-  │<── set cookies + 302 / ──│                            │
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant B as Backend
+    participant IdP as OIDC Provider
+
+    C->>B: GET /api/oauth/authorize
+    Note over B: generate random state<br/>set oauth_state cookie
+    B->>IdP: 302 redirect
+    Note over IdP: user authenticates
+    IdP->>B: callback with code
+    Note over C: GET /api/oauth/callback<br/>?code=...&state=...
+    B->>IdP: exchange code
+    IdP->>B: access + refresh token
+    Note over B: verify ID token<br/>validate username
+    B->>C: set cookies + 302 /
 ```
 
 After the redirect, the client has `access_token` and `refresh_token` cookies. All subsequent API calls include them automatically.
@@ -93,16 +86,15 @@ After the redirect, the client has `access_token` and `refresh_token` cookies. A
 
 For clients that can't receive HTTP cookies (native apps, CLI tools), pass `native_redirect` to get tokens back via URL redirect instead:
 
-```
-Client                     Backend                    OIDC Provider
-  │                            │                            │
-  │── GET /api/oauth/authorize ──>                          │
-  │   ?native_redirect=myscheme://oauth/callback            │
-  │                            │                            │
-  │        ... same IdP flow as above ...                   │
-  │                            │                            │
-  │<── 302 myscheme://oauth/callback                        │
-  │    ?access_token=...&refresh_token=...&expires_in=...   │
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant B as Backend
+    participant IdP as OIDC Provider
+
+    C->>B: GET /api/oauth/authorize<br/>?native_redirect=myscheme://oauth/callback
+    Note over B,IdP: ... same IdP flow as above ...
+    B->>C: 302 myscheme://oauth/callback<br/>?access_token=...&refresh_token=...&expires_in=...
 ```
 
 The client receives tokens as URL query parameters, stores them in platform-appropriate secure storage, and sends them via `Authorization: Bearer <token>` header on subsequent requests.
@@ -175,30 +167,24 @@ No dedicated "am I logged in?" endpoint is needed. Any protected API call works:
 
 Clients should handle token refresh **in the API/networking layer** so that application code never deals with auth. The recommended pattern:
 
-```
-┌─ Application code ─────────────────────────────────┐
-│                                                     │
-│   api.get("/api/inbox")   // just works             │
-│   api.post("/api/files")  // just works             │
-│                                                     │
-├─ API layer (intercepts all requests) ──────────────┤
-│                                                     │
-│   1. Make the request                               │
-│   2. If 200 → return response                       │
-│   3. If 401 → attempt refresh (once):               │
-│      a. POST /api/oauth/refresh                     │
-│      b. If refresh succeeds:                        │
-│         - update stored token (if non-cookie)       │
-│         - retry the original request                │
-│         - return retried response                   │
-│      c. If refresh fails:                           │
-│         - signal "unauthenticated" to app layer     │
-│                                                     │
-│   Concurrent 401s: deduplicate refresh requests.    │
-│   While one refresh is in-flight, queue other       │
-│   failed requests and retry them after it resolves. │
-│                                                     │
-└─────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph App["Application code"]
+        A1["api.get('/api/inbox') — just works"]
+        A2["api.post('/api/files') — just works"]
+    end
+
+    subgraph APILayer["API layer (intercepts all requests)"]
+        S1["1. Make the request"]
+        S1 --> S2{"Response?"}
+        S2 -- "200" --> S3["Return response"]
+        S2 -- "401" --> S4["Attempt refresh once"]
+        S4 --> S5["POST /api/oauth/refresh"]
+        S5 -- "succeeds" --> S6["Update stored token\nRetry original request\nReturn retried response"]
+        S5 -- "fails" --> S7["Signal 'unauthenticated'\nto app layer"]
+    end
+
+    App --> APILayer
 ```
 
 This keeps auth invisible to feature code. The app layer only needs to handle the final "unauthenticated" signal (e.g. show login screen).

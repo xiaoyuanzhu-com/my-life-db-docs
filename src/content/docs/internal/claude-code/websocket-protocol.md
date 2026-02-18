@@ -595,13 +595,13 @@ function convertToMessage(sessionMsg: SessionMessage): Message {
 
 Messages form a tree structure using `uuid` and `parentUuid`:
 
-```
-User Message (uuid: A, parentUuid: null)
-  ├─ Assistant Response (uuid: B, parentUuid: A)
-  │   ├─ Tool Call (uuid: C, parentUuid: B)
-  │   │   └─ Tool Result (uuid: D, parentUuid: C)
-  │   └─ Final Response (uuid: E, parentUuid: D)
-  └─ [Alternative branch if user edits/forks]
+```mermaid
+graph TD
+    A["User Message\n(uuid: A, parentUuid: null)"] --> B["Assistant Response\n(uuid: B, parentUuid: A)"]
+    B --> C["Tool Call\n(uuid: C, parentUuid: B)"]
+    C --> D["Tool Result\n(uuid: D, parentUuid: C)"]
+    B --> E["Final Response\n(uuid: E, parentUuid: D)"]
+    A --> F["Alternative branch\nif user edits/forks"]
 ```
 
 **Building Thread Tree**:

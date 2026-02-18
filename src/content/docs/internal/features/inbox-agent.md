@@ -32,57 +32,37 @@ The agent does NOT wrap the existing app search. The agent IS the new search -- 
 
 ## Architecture
 
-```
-+-----------------------------------------------------------------------------+
-|                              THE APP                                         |
-|                                                                             |
-|  +------------------------------------------------------------------------+ |
-|  |                         App Backend                                    | |
-|  |                                                                        | |
-|  |   Files | Library | Digest | FS Service | Database                    | |
-|  |                                                                        | |
-|  |   +------------------------------------------------------------------+| |
-|  |   |                       AppClient Interface                        || |
-|  |   |  (The app's capabilities exposed as simple methods)              || |
-|  |   |                                                                  || |
-|  |   |  getFile(path) -> file+digests                                    || |
-|  |   |  getFolderTree() -> tree                                          || |
-|  |   |  moveFile(from, to) -> ok                                         || |
-|  |   |  readGuideline() -> text                                          || |
-|  |   |  listRecentFiles() -> files                                       || |
-|  |   +------------------------------------------------------------------+| |
-|  +------------------------------------------------------------------------+ |
-|                                  ^                                          |
-|                                  | AppClient calls                          |
-|                                  |                                          |
-|  +-------------------------------+--------------------------------------+  |
-|  |                          Agent Runtime                                |  |
-|  |                   (Uses Anthropic's tool use pattern)                 |  |
-|  |                                                                       |  |
-|  |  +-------------------------------------------------------------+    |  |
-|  |  |  Tool Loop                                                    |    |  |
-|  |  |                                                               |    |  |
-|  |  |  1. Receive new inbox file event from FS service              |    |  |
-|  |  |  2. Build messages with file context                          |    |  |
-|  |  |  3. Call Claude with tools=[get_file, get_folder_tree, ...]  |    |  |
-|  |  |  4. Execute tool calls via AppClient                          |    |  |
-|  |  |  5. Add tool results to messages                              |    |  |
-|  |  |  6. Repeat until agent responds without tools                 |    |  |
-|  |  |  7. Return suggestion (or skip if unsure)                     |    |  |
-|  |  +-------------------------------------------------------------+    |  |
-|  |                                                                       |  |
-|  |  Tools (map directly to AppClient methods):                          |  |
-|  |  - get_file                                                           |  |
-|  |  - get_folder_tree                                                    |  |
-|  |  - read_guideline                                                     |  |
-|  |  - create_suggestion                                                  |  |
-|  |  - list_recent_files                                                  |  |
-|  +-----------------------------------------------------------------------+  |
-|                                                                             |
-|  Trigger:                                                                   |
-|    FS Service --(new inbox file)--> Agent Runtime                          |
-|    (fsnotify watch OR periodic scan OR upload API)                          |
-+-----------------------------------------------------------------------------+
+```mermaid
+graph TD
+    subgraph TheApp["THE APP"]
+        subgraph AppBackend["App Backend"]
+            Services["Files | Library | Digest | FS Service | Database"]
+            subgraph AppClient["AppClient Interface"]
+                GF["getFile(path) → file+digests"]
+                GFT["getFolderTree() → tree"]
+                MF["moveFile(from, to) → ok"]
+                RG["readGuideline() → text"]
+                LRF["listRecentFiles() → files"]
+            end
+        end
+
+        AppClient -- "AppClient calls" --> AgentRuntime
+
+        subgraph AgentRuntime["Agent Runtime (Anthropic tool use pattern)"]
+            subgraph ToolLoop["Tool Loop"]
+                TL1["1. Receive new inbox file event"]
+                TL2["2. Build messages with file context"]
+                TL3["3. Call Claude with tools"]
+                TL4["4. Execute tool calls via AppClient"]
+                TL5["5. Add tool results to messages"]
+                TL6["6. Repeat until no more tools"]
+                TL7["7. Return suggestion"]
+            end
+            Tools["Tools: get_file, get_folder_tree,\nread_guideline, create_suggestion,\nlist_recent_files"]
+        end
+
+        Trigger["FS Service --(new inbox file)--→ Agent Runtime\n(fsnotify watch OR periodic scan OR upload API)"]
+    end
 ```
 
 ---
@@ -519,39 +499,24 @@ func (a *Agent) buildSystemPrompt(ctx context.Context) string {
 
 ### New inbox file: W2_2024.pdf
 
-```
-FS Service detects: inbox/W2_2024.pdf (new file)
-        |
-Server calls: agent.OrganizeFile(ctx, "inbox/W2_2024.pdf")
-        |
-Agent calls: read_guideline()
-        |
-Guideline shows:
-  - work/hotstar/compensation/ for salary/equity docs
-  - life/gov docs/ for government forms
-        |
-Agent calls: get_file("inbox/W2_2024.pdf")
-        |
-File content shows:
-  - Form W-2 (tax document)
-  - Employer: Hotstar
-  - Year: 2024
-        |
-Agent calls: get_folder_tree(2)
-        |
-Folder tree confirms:
-  - work/hotstar/compensation/ exists
-        |
-Agent calls: create_suggestion(
-    file_path="inbox/W2_2024.pdf",
-    target_folder="work/hotstar/compensation/",
-    reasoning="W-2 is a tax form from your employer Hotstar. Based on your guideline, compensation-related documents go in work/hotstar/compensation/",
-    confidence=0.92
-)
-        |
-User sees notification via SSE:
-  "Suggest moving W2_2024.pdf -> work/hotstar/compensation/
-   [Move] [Keep in Inbox] [Choose Different Folder]"
+```mermaid
+sequenceDiagram
+    participant FS as FS Service
+    participant S as Server
+    participant A as Agent (Claude)
+    participant U as User (via SSE)
+
+    FS->>S: detect inbox/W2_2024.pdf (new file)
+    S->>A: OrganizeFile(ctx, "inbox/W2_2024.pdf")
+    A->>A: read_guideline()
+    Note over A: work/hotstar/compensation/ for salary docs<br/>life/gov docs/ for government forms
+    A->>A: get_file("inbox/W2_2024.pdf")
+    Note over A: Form W-2, Employer: Hotstar, Year: 2024
+    A->>A: get_folder_tree(2)
+    Note over A: work/hotstar/compensation/ exists
+    A->>A: create_suggestion(file, target, reasoning, 0.92)
+    A->>U: SSE notification
+    Note over U: Suggest moving W2_2024.pdf →<br/>work/hotstar/compensation/<br/>[Move] [Keep in Inbox] [Choose Different Folder]
 ```
 
 ---

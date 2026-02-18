@@ -30,33 +30,28 @@ The app uses **SwiftUI** with a single Xcode target that builds for:
 
 The app uses a **hybrid approach**: native SwiftUI shell with WebView-rendered content.
 
-```
-+-------------------------------------------------------------+
-|                    iOS/macOS App (This Project)                |
-+-------------------------------------------------------------+
-|   +---------------------+    +-----------------------------+  |
-|   |  Native SwiftUI     |    |  WKWebView                  |  |
-|   |  Shell              |    |  (Embedded Web Frontend)     |  |
-|   |                     |    |                              |  |
-|   |  . Tab bar/Sidebar  |<-->|  . Document viewer           |  |
-|   |  . Navigation       | JS |  . Library browser           |  |
-|   |  . Share extension  |Brdg|  . Search results            |  |
-|   |  . Widgets          |    |  . Rich content (MD, code)   |  |
-|   |  . Notifications    |    |  . Mermaid diagrams          |  |
-|   +---------------------+    +-----------------------------+  |
-+-----------------------------------+---------------------------+
-                                    |
-                                    v
-                      +-----------------------------+
-                      |   MyLifeDB Backend (Go)     |
-                      |   REST API + SSE            |
-                      |   Port 12345                |
-                      +-----------------------------+
-                                    |
-                      +-----------------------------+
-                      |   User Data Directory       |
-                      |   (Source of Truth)          |
-                      +-----------------------------+
+```mermaid
+graph TD
+    subgraph App["iOS/macOS App (This Project)"]
+        subgraph Native["Native SwiftUI Shell"]
+            N1["Tab bar/Sidebar"]
+            N2["Navigation"]
+            N3["Share extension"]
+            N4["Widgets"]
+            N5["Notifications"]
+        end
+        subgraph WebView["WKWebView (Embedded Web Frontend)"]
+            W1["Document viewer"]
+            W2["Library browser"]
+            W3["Search results"]
+            W4["Rich content (MD, code)"]
+            W5["Mermaid diagrams"]
+        end
+        Native <-- "JS Bridge" --> WebView
+    end
+
+    App --> Backend["MyLifeDB Backend (Go)\nREST API + SSE\nPort 12345"]
+    Backend --> Data["User Data Directory\n(Source of Truth)"]
 ```
 
 **Why hybrid?**
@@ -73,14 +68,12 @@ The app uses a **hybrid approach**: native SwiftUI shell with WebView-rendered c
 
 The app directly fetches from the backend API. No local caching or sync logic.
 
-```
-+------------------------------------------+
-|           iOS/macOS App                   |
-+------------------------------------------+
-|  SwiftUI Views                           |
-|       |                                  |
-|  API Client -> Backend API               |
-+------------------------------------------+
+```mermaid
+graph LR
+    subgraph App["iOS/macOS App"]
+        Views["SwiftUI Views"] --> Client["API Client"]
+    end
+    Client --> Backend["Backend API"]
 ```
 
 - **Fetch on demand** -- Views request data from API when needed
@@ -138,37 +131,30 @@ MyLifeDB/
 
 ### Reading Data
 
-```
-1. View appears or user triggers refresh
-        |
-2. Call API endpoint (async/await)
-        |
-3. Decode JSON response to Swift structs
-        |
-4. Update @State / @Observable in view
-        |
-5. SwiftUI re-renders
+```mermaid
+graph TD
+    A["1. View appears or user triggers refresh"] --> B["2. Call API endpoint (async/await)"]
+    B --> C["3. Decode JSON response to Swift structs"]
+    C --> D["4. Update @State / @Observable in view"]
+    D --> E["5. SwiftUI re-renders"]
 ```
 
 ### Writing Data
 
-```
-1. User action (e.g., pin a file)
-        |
-2. POST/PUT to backend API
-        |
-3. On success: update view state
-   On failure: show error alert
+```mermaid
+graph TD
+    A["1. User action (e.g., pin a file)"] --> B["2. POST/PUT to backend API"]
+    B --> C{"3. Result?"}
+    C -- Success --> D["Update view state"]
+    C -- Failure --> E["Show error alert"]
 ```
 
 ### Real-time Updates (SSE) -- Optional
 
-```
-Backend SSE Stream (/api/notifications/stream)
-        |
-Parse event type (file_changed, digest_completed, etc.)
-        |
-Trigger view refresh for affected data
+```mermaid
+graph TD
+    A["Backend SSE Stream\n(/api/notifications/stream)"] --> B["Parse event type\n(file_changed, digest_completed, etc.)"]
+    B --> C["Trigger view refresh\nfor affected data"]
 ```
 
 ---

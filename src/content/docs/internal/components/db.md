@@ -6,20 +6,20 @@ The database layer provides SQLite access with migrations, generic query helpers
 
 ## Architecture
 
-```
-Database Package
-+-- connection.go     # DB struct, Open/Close, singleton
-+-- client.go         # Generic query helpers (Select, SelectOne, Run)
-+-- migrations.go     # Migration runner
-+-- migration_*.go    # Individual migrations
-+-- models.go         # Data structures
-+-- files.go          # File operations
-+-- digests.go        # Digest operations
-+-- pins.go           # Pin operations
-+-- settings.go       # Settings operations
-+-- sqlar.go          # SQLAR archive operations
-+-- meili_documents.go # Meilisearch sync
-+-- qdrant_documents.go # Qdrant sync
+```mermaid
+graph LR
+    DB["Database Package"] --> connection["connection.go\nDB struct, Open/Close, singleton"]
+    DB --> client["client.go\nGeneric query helpers"]
+    DB --> migrations["migrations.go\nMigration runner"]
+    DB --> migration_["migration_*.go\nIndividual migrations"]
+    DB --> models["models.go\nData structures"]
+    DB --> files["files.go\nFile operations"]
+    DB --> digests["digests.go\nDigest operations"]
+    DB --> pins["pins.go\nPin operations"]
+    DB --> settings["settings.go\nSettings operations"]
+    DB --> sqlar["sqlar.go\nSQLAR archive operations"]
+    DB --> meili["meili_documents.go\nMeilisearch sync"]
+    DB --> qdrant["qdrant_documents.go\nQdrant sync"]
 ```
 
 ## Key Components
