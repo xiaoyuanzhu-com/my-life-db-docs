@@ -4,296 +4,236 @@ title: "Authentication"
 
 The auth system supports three modes configured via `MLD_AUTH_MODE` environment variable.
 
-## Auth Modes
-
 | Mode | Description | Use Case |
 |------|-------------|----------|
 | `none` | No authentication (default) | Local development, single-user |
 | `password` | Simple password auth | Basic protection |
-| `oauth` | OIDC/OAuth 2.0 | Enterprise, SSO integration |
+| `oauth` | OIDC/OAuth 2.0 | Production, SSO integration |
 
-## Key Components
-
-| Location | Purpose |
-|----------|---------|
-| `backend/auth/oauth.go` | Auth mode detection, helper functions |
-| `backend/auth/oidc_provider.go` | OIDC provider initialization |
-| `backend/api/auth.go` | Password auth handlers |
-| `backend/api/oauth.go` | OAuth flow handlers |
-| `frontend/app/contexts/auth-context.tsx` | Frontend auth state |
-| `frontend/app/lib/fetch-with-refresh.ts` | Token refresh logic |
-
-## Current Implementation Status
-
-> **Important**: This documents the **actual** implementation, not an ideal design.
-
-| Feature | Status | Notes |
-|---------|--------|-------|
-| OAuth flow | Complete | Full authorization code flow |
-| Token refresh | Complete | Frontend auto-refresh on 401 |
-| Password login | Partial | Handlers exist, but uses SHA256 (not secure) |
-| Password sessions | Incomplete | TODO in code - no database session storage |
-| Auth middleware | Not implemented | Routes are currently unprotected |
-
-## Auth Mode Detection
-
-```go
-// backend/auth/oauth.go
-type AuthMode string
-
-const (
-    AuthModeNone     AuthMode = "none"
-    AuthModePassword AuthMode = "password"
-    AuthModeOAuth    AuthMode = "oauth"
-)
-
-func GetAuthMode() AuthMode {
-    mode := strings.ToLower(config.Get().AuthMode)
-    switch mode {
-    case "password":
-        return AuthModePassword
-    case "oauth":
-        return AuthModeOAuth
-    default:
-        return AuthModeNone
-    }
-}
-
-// Helper functions
-func IsOAuthEnabled() bool { return GetAuthMode() == AuthModeOAuth }
-func IsPasswordAuthEnabled() bool { return GetAuthMode() == AuthModePassword }
-func IsAuthRequired() bool { return GetAuthMode() != AuthModeNone }
-```
-
-## OAuth/OIDC
-
-### Flow Diagram
-
-```
-Browser                    Backend                    OIDC Provider
-   |                          |                            |
-   |-- GET /api/oauth/authorize -->                        |
-   |                          |-- redirect to provider --->|
-   |                          |                            |
-   |<-------------------------|<-- callback with code -----|
-   |                          |                            |
-   |                          |-- exchange code for token ->|
-   |                          |<-- access + refresh token --|
-   |                          |                            |
-   |<-- set cookies -----------|                            |
-```
-
-### Configuration
+## Configuration
 
 ```bash
-MLD_AUTH_MODE=oauth
+# Auth mode (required)
+MLD_AUTH_MODE=none|password|oauth
+
+# OAuth (required when mode=oauth)
 MLD_OAUTH_CLIENT_ID=your-client-id
 MLD_OAUTH_CLIENT_SECRET=your-secret
 MLD_OAUTH_ISSUER_URL=https://your-idp.com
 MLD_OAUTH_REDIRECT_URI=https://your-app.com/api/oauth/callback
-MLD_EXPECTED_USERNAME=optional-username-filter
+
+# Single-user filter (optional) — rejects logins from other usernames
+MLD_EXPECTED_USERNAME=user@domain.com
 ```
 
-### Token Storage
-
-Tokens are stored in HTTP-only cookies:
-
-```go
-// Access token cookie
-c.SetCookie(
-    "access_token",
-    accessToken,
-    int(expiresIn.Seconds()),
-    "/",              // Available to all paths
-    "",
-    !isDev,           // Secure in production
-    true,             // HttpOnly
-)
-
-// Refresh token cookie
-c.SetCookie(
-    "refresh_token",
-    refreshToken,
-    86400 * 30,       // 30 days
-    "/api/oauth",     // Only available to OAuth endpoints
-    "",
-    !isDev,
-    true,
-)
-```
-
-### Known Issues
-
-**State parameter validation**: The OAuth state parameter is currently hardcoded:
-```go
-state := "state-token"  // TODO: Generate random state and store in session
-```
-
-This is a security concern - should generate random state per request.
-
-## Password Auth
-
-### Current Implementation
-
-```go
-// backend/api/auth.go
-func (h *Handlers) Login(c *gin.Context) {
-    // Uses SHA256 hash (NOT secure for passwords)
-    // Should use bcrypt/argon2
-    hash := sha256.Sum256([]byte(password))
-    // ...
-
-    // TODO: Session storage not implemented
-    // Note: We'd need to add a CreateSession function to db package
-}
-```
-
-### Security Concerns
-
-1. **SHA256 for passwords** - Vulnerable to rainbow table attacks. Should use bcrypt/argon2/scrypt
-2. **No session storage** - Password sessions are not persisted to database
-3. **No CSRF protection** - No token validation
-
-## Route Protection
-
-> **Important**: There is currently **NO route protection middleware**.
-
-Routes in `backend/api/routes.go` are registered **without** any authentication middleware:
-
-```go
-// Current state - all routes are public
-api := router.Group("/api")
-api.GET("/inbox", h.GetInbox)  // No middleware
-api.POST("/files", h.UploadFile)  // No middleware
-```
-
-Authentication is only enforced by:
-1. Frontend AuthContext checking auth state
-2. `fetch-with-refresh.ts` handling 401 errors
-
-## Frontend Integration
-
-### AuthContext
-
-```typescript
-// frontend/app/contexts/auth-context.tsx
-// Note: Actual implementation is simpler than previously documented
-
-const AuthContext = createContext<{
-    isAuthenticated: boolean
-    isLoading: boolean
-    checkAuth: () => Promise<void>
-}>()
-```
-
-The context checks auth by calling `/api/settings` - if it succeeds, user is authenticated.
-
-### Token Refresh
-
-```typescript
-// frontend/app/lib/fetch-with-refresh.ts
-export async function fetchWithRefresh(url: string, options: RequestInit) {
-    const response = await fetch(url, options);
-
-    if (response.status === 401) {
-        // Try to refresh token
-        const refreshResponse = await fetch('/api/oauth/refresh', {
-            method: 'POST',
-            credentials: 'include',
-        });
-
-        if (refreshResponse.ok) {
-            // Retry original request
-            return fetch(url, options);
-        }
-
-        // Refresh failed, redirect to login
-        window.location.href = '/login';
-    }
-
-    return response;
-}
-```
+OIDC discovery is automatic — the backend fetches `/.well-known/openid-configuration` from the issuer URL.
 
 ## API Routes
 
+### OAuth
+
 | Route | Method | Purpose |
 |-------|--------|---------|
-| `/api/auth/login` | POST | Password login |
-| `/api/auth/logout` | POST | Logout (all modes) |
-| `/api/oauth/authorize` | GET | Start OAuth flow |
-| `/api/oauth/callback` | GET | OAuth callback (receives code) |
+| `/api/oauth/authorize` | GET | Start OAuth flow — redirects to IdP |
+| `/api/oauth/callback` | GET | OAuth callback — receives auth code from IdP |
+| `/api/oauth/token` | GET | Validate current token, return user info |
 | `/api/oauth/refresh` | POST | Refresh access token |
-| `/api/oauth/logout` | POST | OAuth logout (clears cookies) |
+| `/api/oauth/logout` | POST | Clear auth cookies |
 
-## Common Modifications
+### Password
 
-### Adding Route Protection
+| Route | Method | Purpose |
+|-------|--------|---------|
+| `/api/auth/login` | POST | Login with password |
+| `/api/auth/logout` | POST | Logout, clear session cookie |
 
-To actually protect routes, you would need to add middleware:
+### Route Protection
 
-```go
-// backend/auth/middleware.go (to create)
-func RequireAuth() gin.HandlerFunc {
-    return func(c *gin.Context) {
-        mode := GetAuthMode()
-        if mode == AuthModeNone {
-            c.Next()
-            return
-        }
+All `/api/*` routes (except auth endpoints) are protected by `AuthMiddleware` when `MLD_AUTH_MODE != "none"`. The middleware checks:
 
-        // Check token/session based on mode
-        if mode == AuthModeOAuth {
-            token, err := c.Cookie("access_token")
-            if err != nil || token == "" {
-                c.AbortWithStatus(401)
-                return
-            }
-            // Validate token...
-        }
+- **OAuth mode** — validates `access_token` cookie (or `Authorization: Bearer <token>` header) against the OIDC provider
+- **Password mode** — validates `session` cookie against the database
 
-        c.Next()
-    }
+Unauthorized requests receive `401` with `{"error": "Unauthorized", "code": "INVALID_TOKEN"|"INVALID_SESSION"}`.
+
+## OAuth Login Flow
+
+Two variants depending on whether the client can receive cookies directly.
+
+### Cookie-based (web browsers)
+
+```
+Client                     Backend                    OIDC Provider
+  │                          │                            │
+  │── GET /api/oauth/authorize ──>                        │
+  │                          │                            │
+  │                          │  generate random state     │
+  │                          │  set oauth_state cookie    │
+  │                          │                            │
+  │<── 302 redirect ─────────│──────────────────────────> │
+  │                          │                            │
+  │                          │       user authenticates   │
+  │                          │                            │
+  │<─────────────────────────│<── callback with code ─────│
+  │                          │                            │
+  │  GET /api/oauth/callback │                            │
+  │  ?code=...&state=...     │                            │
+  │                          │── exchange code ──────────>│
+  │                          │<── access + refresh token ─│
+  │                          │                            │
+  │                          │  verify ID token           │
+  │                          │  validate username         │
+  │                          │                            │
+  │<── set cookies + 302 / ──│                            │
+```
+
+After the redirect, the client has `access_token` and `refresh_token` cookies. All subsequent API calls include them automatically.
+
+### Redirect-based (native clients)
+
+For clients that can't receive HTTP cookies (native apps, CLI tools), pass `native_redirect` to get tokens back via URL redirect instead:
+
+```
+Client                     Backend                    OIDC Provider
+  │                            │                            │
+  │── GET /api/oauth/authorize ──>                          │
+  │   ?native_redirect=myscheme://oauth/callback            │
+  │                            │                            │
+  │        ... same IdP flow as above ...                   │
+  │                            │                            │
+  │<── 302 myscheme://oauth/callback                        │
+  │    ?access_token=...&refresh_token=...&expires_in=...   │
+```
+
+The client receives tokens as URL query parameters, stores them in platform-appropriate secure storage, and sends them via `Authorization: Bearer <token>` header on subsequent requests.
+
+### Cookies
+
+| Cookie | Max-Age | Path | Scope |
+|--------|---------|------|-------|
+| `access_token` | Token's expiry (~1h) | `/` | All API calls |
+| `refresh_token` | 30 days | `/api/oauth` | Refresh endpoint only |
+| `oauth_state` | 5 minutes | `/api/oauth` | CSRF validation during login |
+
+All cookies are `HttpOnly`. `Secure` is set in production.
+
+### Token Validation
+
+```
+GET /api/oauth/token
+Authorization: Bearer <access_token>  (or access_token cookie)
+
+200 { "authenticated": true, "username": "...", "sub": "...", "email": "..." }
+401 { "authenticated": false, "error": "invalid_token" }
+```
+
+### Token Refresh
+
+```
+POST /api/oauth/refresh
+Cookie: refresh_token=...  (or send refresh_token in request body for non-cookie clients)
+
+200 {
+  "success": true,
+  "access_token": "new-token",
+  "refresh_token": "new-or-same",
+  "expiresIn": 3600
 }
+Set-Cookie: access_token=...; refresh_token=...
 
-// backend/api/routes.go
-protected := router.Group("/api")
-protected.Use(auth.RequireAuth())
-protected.GET("/inbox", h.GetInbox)
+401  (refresh token expired or invalid)
 ```
 
-### Fixing Password Auth Security
+## Password Auth Flow
 
-```go
-// Use bcrypt instead of SHA256
-import "golang.org/x/crypto/bcrypt"
+```
+POST /api/auth/login
+Content-Type: application/json
+{ "password": "..." }
 
-hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-err := bcrypt.CompareHashAndPassword(hashedPassword, []byte(inputPassword))
+200 { "success": true, "sessionId": "..." }
+Set-Cookie: session=<64-char-hex-token>; Max-Age=2592000; Path=/; HttpOnly; Secure
+
+401 { "error": "Invalid password" }
 ```
 
-### Adding Session Storage
+- First login with no stored password creates one (bootstrap)
+- Sessions are stored in the `sessions` table (30-day expiry, extended on use)
+- Logout clears the `session` cookie
 
-```go
-// backend/db/sessions.go (to create)
-type Session struct {
-    ID        string
-    UserID    string
-    ExpiresAt time.Time
-    CreatedAt time.Time
-}
+## Client Integration Guide
 
-func CreateSession(userID string) (*Session, error)
-func GetSession(sessionID string) (*Session, error)
-func DeleteSession(sessionID string) error
+### Auth check
+
+No dedicated "am I logged in?" endpoint is needed. Any protected API call works:
+
+1. Call any API endpoint (e.g. `GET /api/settings`)
+2. `200` → authenticated
+3. `401` → not authenticated (or token expired — see refresh below)
+
+### Transparent token refresh
+
+Clients should handle token refresh **in the API/networking layer** so that application code never deals with auth. The recommended pattern:
+
+```
+┌─ Application code ─────────────────────────────────┐
+│                                                     │
+│   api.get("/api/inbox")   // just works             │
+│   api.post("/api/files")  // just works             │
+│                                                     │
+├─ API layer (intercepts all requests) ──────────────┤
+│                                                     │
+│   1. Make the request                               │
+│   2. If 200 → return response                       │
+│   3. If 401 → attempt refresh (once):               │
+│      a. POST /api/oauth/refresh                     │
+│      b. If refresh succeeds:                        │
+│         - update stored token (if non-cookie)       │
+│         - retry the original request                │
+│         - return retried response                   │
+│      c. If refresh fails:                           │
+│         - signal "unauthenticated" to app layer     │
+│                                                     │
+│   Concurrent 401s: deduplicate refresh requests.    │
+│   While one refresh is in-flight, queue other       │
+│   failed requests and retry them after it resolves. │
+│                                                     │
+└─────────────────────────────────────────────────────┘
 ```
 
-## Files to Modify
+This keeps auth invisible to feature code. The app layer only needs to handle the final "unauthenticated" signal (e.g. show login screen).
 
-| Task | Files |
-|------|-------|
-| Add auth middleware | Create `backend/auth/middleware.go` |
-| Fix password hashing | `backend/api/auth.go` |
-| Add session storage | Create `backend/db/sessions.go` |
-| Change OAuth flow | `backend/api/oauth.go` |
-| Frontend auth state | `frontend/app/contexts/auth-context.tsx` |
+### Proactive refresh (optional)
+
+To avoid the latency of a failed request → refresh → retry cycle, clients can proactively refresh before the token expires:
+
+1. After login or refresh, read `expiresIn` from the response (or parse the JWT `exp` claim)
+2. Schedule a background refresh for ~60 seconds before expiry
+3. On app resume/foreground, check if the token is expiring soon (< 2 min) and refresh if so
+
+This is an optimization — the reactive 401-based refresh is the required baseline.
+
+### Auth state
+
+Clients typically expose a simple auth state to the UI:
+
+| State | Meaning |
+|-------|---------|
+| `unknown` | App just launched, haven't checked yet |
+| `checking` | Validating token or refreshing |
+| `authenticated` | Valid session, user info available |
+| `unauthenticated` | No valid session, show login |
+
+Transitions: `unknown` → `checking` → `authenticated` or `unauthenticated`. The API layer's refresh failure triggers `authenticated` → `unauthenticated`.
+
+## Key Files
+
+| Component | Location |
+|-----------|----------|
+| Auth mode detection | `backend/auth/oauth.go` |
+| OIDC provider setup | `backend/auth/oidc_provider.go` |
+| Auth middleware | `backend/api/middleware.go` |
+| OAuth handlers | `backend/api/oauth.go` |
+| Password handlers | `backend/api/auth.go` |
+| Session storage | `backend/db/sessions.go` |
+| Route registration | `backend/api/routes.go` |
