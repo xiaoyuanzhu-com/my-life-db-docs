@@ -1349,6 +1349,7 @@ Some message types are intentionally **not rendered** in the chat interface as s
 | `type: "stream_event"` | Streaming transport signals (e.g., `message_start`, `content_block_delta`, `message_stop`). Stdout only, requires `--include-partial-messages`. No user-facing content. |
 | `type: "rate_limit_event"` | Rate limit status from Claude API (stdout only, not persisted). Operational metadata — when `status: "allowed"` it's noise, and when rate-limited Claude Code handles it at the CLI level (pausing/retrying). See [data-models.md "Rate Limit Event"](./data-models.md#11-rate-limit-event-stdout-only). |
 | `parent_tool_use_id` set | Subagent messages - rendered inside parent Task tool, not as top-level messages. See [data-models.md "Subagent Message Hierarchy"](./data-models.md#subagent-message-hierarchy--critical). |
+| `system.subtype: task_started` | Redundant with Task tool_use block — the Task tool header already shows the same description. No linking field exists (`task_id` ≠ `tool_use.id`) to merge into the tool block. |
 
 **Progress Messages:**
 

@@ -344,7 +344,7 @@ This is returned **exactly as-is** from the API, even though the `SummarySession
 
 | Type | Subtypes |
 |------|----------|
-| `system` | `init`, `compact_boundary`, `microcompact_boundary`, `turn_duration`, `api_error`, `local_command`, `hook_started`, `status`, `task_notification` |
+| `system` | `init`, `compact_boundary`, `microcompact_boundary`, `turn_duration`, `api_error`, `local_command`, `hook_started`, `status`, `task_notification`, `task_started` |
 | `progress` | `hook_progress`, `bash_progress`, `agent_progress`, `query_update`, `search_results_received` |
 | `result` | `success`, `error` |
 | `stream_event` | `message_start`, `content_block_start`, `content_block_delta`, `content_block_stop`, `message_delta`, `message_stop` |
@@ -986,6 +986,38 @@ The backend's `ReadSessionWithSubagents()` function handles this:
 5. Returns all messages merged together
 
 This allows the frontend to use the same `parent_tool_use_id` based logic for both live streaming and historical sessions.
+
+#### Task Started Messages
+
+When a Task tool spawns a subagent, a `task_started` system message is emitted to indicate the task has begun execution. This is the counterpart to `task_notification` (which indicates completion).
+
+**Example:**
+```json
+{
+  "type": "system",
+  "subtype": "task_started",
+  "description": "Explore iOS inbox codebase",
+  "task_id": "a3acfec",
+  "task_type": "local_agent",
+  "session_id": "ce8a7595-3a98-467b-b1dd-46eecd400cab",
+  "uuid": "a2bb2830-0c82-434a-984f-bff33b4fc2c5"
+}
+```
+
+**Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | string | Always `"system"` |
+| `subtype` | string | Always `"task_started"` |
+| `description` | string | Human-readable description of the task (e.g., "Explore iOS inbox codebase") |
+| `task_id` | string | Agent ID (7-char hex, e.g., "a3acfec") - same format as `agentId` in `agent_progress` |
+| `task_type` | string | Type of task (e.g., "local_agent") |
+| `session_id` | string | Session UUID |
+
+**Rendering:** Skipped — filtered out in `session-messages.tsx`. The `task_started` message is redundant with the Task tool_use block, which already displays the same `description` in its header. Unlike `agent_progress` (which has `parentToolUseID`), `task_started` has no field to link it back to the parent tool_use (`task_id` is the agent ID, not the `tool_use.id`), so it cannot be merged into the tool block either.
+
+---
 
 **4i. AskUserQuestion Tool** ⭐ INTERACTIVE
 
