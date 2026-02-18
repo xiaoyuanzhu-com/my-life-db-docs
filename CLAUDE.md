@@ -52,6 +52,30 @@ src/content/docs/
     # 4. clean up — ONLY when user explicitly asks (or after merge)
     git worktree remove .worktrees/<name> && git branch -d <branch>
 
+## Diagrams — Use Mermaid, Not ASCII
+
+This site has `astro-mermaid` configured — fenced ` ```mermaid ` blocks render automatically at build time.
+
+**Always use Mermaid** for architecture diagrams, flowcharts, sequence diagrams, state machines, and dependency trees. Never use ASCII art for these.
+
+**Pick the right diagram type:**
+
+| What you're showing | Mermaid type | Example |
+|---------------------|-------------|---------|
+| Component dependencies, data flow | `graph TD` or `graph LR` | Server → DB → Router |
+| Request/response sequences | `sequenceDiagram` | OAuth login flow |
+| State machines | `stateDiagram-v2` | Digest status transitions |
+| Class/struct relationships | `classDiagram` | Database schema |
+| Multi-phase pipelines | `graph TD` with `subgraph` | Digest processing phases |
+
+**Exception — UI wireframes stay as ASCII.** Mermaid can't express spatial layouts (screen mockups, component positioning). Use box-drawing characters (`┌ ─ ┐ │ └ ┘`) inside a plain ` ``` ` block for these.
+
+**Style tips:**
+- Use descriptive node labels: `DB["SQLite (WAL)"]` not just `DB`
+- Use `\n` for multi-line labels: `"Line 1\nLine 2"`
+- Quote labels containing special characters: `["label with (parens)"]`
+- Prefer `graph TD` (top-down) for hierarchies, `graph LR` (left-right) for pipelines
+
 ## Naming Conventions
 
 | Category | Convention | Example |
