@@ -188,10 +188,10 @@ Each file type renders with a specialized inline preview card:
 | Two-finger pinch | Zoom in/out (0.5×–5×) |
 | Single tap | Dismiss preview |
 | Double tap | Toggle zoom (1× ↔ 2.5×, centered on tap point) |
-| Swipe left | Previous media file — toward older items |
-| Swipe right | Next media file — toward newer items |
+| Swipe left | Next media file — toward newer items |
+| Swipe right | Previous media file — toward older items |
 
-> **Swipe direction rationale:** The inbox feed is newest-at-bottom. The pager presents items in reverse-chronological order (newest first), so swiping left goes back in time (older) and swiping right goes forward (newer). This matches the natural reading direction: left = past, right = future.
+> **Swipe direction rationale:** The pager lays out items in chronological order (oldest on the left, newest on the right). Swiping left reveals what's to the right (newer), swiping right reveals what's to the left (older). This matches a timeline mental model: left = past, right = future.
 
 **Thumbnail → Full-Screen Transition:**
 
@@ -209,7 +209,7 @@ Tapping a thumbnail opens the full-screen viewer with a **zoom transition** — 
 
 **Media pager:**
 - Horizontal swipe between images and videos only
-- Items presented in reverse-chronological order (newest first) — swipe left for older, right for newer
+- Items presented in chronological order (oldest first) — swipe left for newer, right for older
 - Non-media files open as single viewer (no paging)
 - Infinite scroll: loads older media items when approaching end
 - Simple side-by-side paging (ScrollView with `.paging` snap behavior)
@@ -520,4 +520,4 @@ This feature is opt-in and does not affect core inbox functionality.
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0 | 2026-02-16 | Initial product requirements document |
-| 1.1 | 2026-02-18 | Reversed media pager swipe direction (left=older, right=newer); clarified double-tap zoom behavior (1× ↔ 2.5×); simplified pager to side-by-side ScrollView paging |
+| 1.1 | 2026-02-18 | Clarified double-tap zoom behavior (1× ↔ 2.5×); simplified pager to side-by-side ScrollView paging; media pager uses chronological order (oldest-left, newest-right) — swipe left=newer, right=older |
