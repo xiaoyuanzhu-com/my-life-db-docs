@@ -43,6 +43,10 @@ export default defineConfig({
 							autogenerate: { directory: 'internal/apple-client' },
 						},
 						{
+							label: 'Product Design',
+							autogenerate: { directory: 'internal/product-design' },
+						},
+						{
 							label: 'Design',
 							autogenerate: { directory: 'internal/design' },
 						},
