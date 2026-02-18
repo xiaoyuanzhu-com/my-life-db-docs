@@ -338,6 +338,7 @@ This is returned **exactly as-is** from the API, even though the `SummarySession
 | `agent-name` | ❌ | Subagent name assignment |
 | `queue-operation` | ❌ | Internal queue management |
 | `file-history-snapshot` | ❌ | File version tracking |
+| `rate_limit_event` | ❌ | Rate limit status from Claude API (stdout only, not persisted) |
 
 **Subtype Reference:**
 
@@ -1830,6 +1831,37 @@ Stream events contain Anthropic API streaming events, enabling progressive text 
 {"type":"file-history-snapshot","messageId":"...","snapshot":{"trackedFileBackups":{},"timestamp":"..."},"isSnapshotUpdate":false}
 {"type":"stream_event","event":{"type":"message_stop"},"parent_tool_use_id":null,"session_id":"...","uuid":"..."}
 ```
+
+**11. Rate Limit Event (stdout only)**
+
+Emitted by the Claude Code CLI to report the current rate limit status. These are **stdout only** (not persisted to JSONL) and appear during live sessions. Skipped in the UI — rate limit state is operational metadata, not user-facing content. If the user is actually rate-limited, Claude Code handles it at the CLI level (pausing, retrying) which surfaces as separate messages.
+
+```json
+{
+  "type": "rate_limit_event",
+  "rate_limit_info": {
+    "isUsingOverage": false,
+    "overageResetsAt": 1772323200,
+    "overageStatus": "allowed",
+    "rateLimitType": "five_hour",
+    "resetsAt": 1771426800,
+    "status": "allowed"
+  },
+  "session_id": "74bf76eb-8c6e-42ef-971d-55b98ed156ef",
+  "uuid": "2d3bcf11-9a25-43c3-9e3c-286c722d6061"
+}
+```
+
+**Fields** (`rate_limit_info` object):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | string | Current rate limit status: `"allowed"` or `"limited"` |
+| `rateLimitType` | string | Type of rate limit window (e.g., `"five_hour"`) |
+| `resetsAt` | number | Unix timestamp when the current rate limit window resets |
+| `isUsingOverage` | boolean | Whether the user is consuming overage capacity |
+| `overageStatus` | string | Whether overage is permitted: `"allowed"` or `"blocked"` |
+| `overageResetsAt` | number | Unix timestamp when the overage window resets |
 
 **Threading**: Messages form a tree structure using `uuid` and `parentUuid`:
 ```mermaid
