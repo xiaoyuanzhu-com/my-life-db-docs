@@ -121,9 +121,25 @@ Authorization: Bearer <access_token>  (or access_token cookie)
 
 ### Token Refresh
 
+The refresh endpoint accepts the refresh token from **two sources** — each client type uses whichever is natural:
+
+| Client | Sends refresh token via |
+|--------|------------------------|
+| Web browser | `Cookie: refresh_token=…` (auto-sent by browser) |
+| Native app | JSON body `{"refresh_token": "…"}` |
+| Hybrid WebView | Delegates to native (see [Hybrid App Auth](#hybrid-app-auth-native--webview)) |
+
+The backend checks the cookie first, then falls back to the request body:
+
 ```
 POST /api/oauth/refresh
-Cookie: refresh_token=...  (or send refresh_token in request body for non-cookie clients)
+
+# Web clients — browser sends cookie automatically
+Cookie: refresh_token=...
+
+# Native clients — send in JSON body
+Content-Type: application/json
+{ "refresh_token": "..." }
 
 200 {
   "success": true,
@@ -135,6 +151,8 @@ Set-Cookie: access_token=...; refresh_token=...
 
 401  (refresh token expired or invalid)
 ```
+
+The response always includes both `Set-Cookie` headers (for cookie-based clients) and a JSON body (for native clients). Each client uses whichever is appropriate — web browsers store the cookies, native apps read the JSON body and save to secure storage.
 
 ## Password Auth Flow
 
@@ -274,19 +292,38 @@ Native apps that embed WebViews (iOS, Android, desktop) need auth in **two netwo
 
 ```
 AuthManager (singleton, secure storage)
-  |
-  |-- accessToken + refreshToken --> platform secure storage (Keychain / Android Keystore)
-  |-- proactive refresh (JWT exp - 60s) + reactive refresh (on 401)
-  |-- single-flight refresh (mutex prevents concurrent refresh calls)
-  |
-  |-- on token change --> push to all active WebViews
-  |
-  +---> Native API Client              WebView Cookie Injection
-        (Authorization: Bearer header)  (document.cookie via JS)
-        from secure storage             from secure storage
+  │
+  ├── Token storage ─────── Keychain / Android Keystore (single source of truth)
+  ├── Proactive refresh ─── JWT exp − 60s timer + foreground resume check
+  ├── Reactive refresh ──── on 401 from native API calls
+  ├── Single-flight ─────── concurrent callers wait for one in-flight refresh
+  │
+  ├── on token change ────► push cookies to all active WebViews
+  │
+  ├──► Native API calls          ──► Authorization: Bearer <token>
+  │    (reads from secure storage)    (standard HTTP header, no cookies)
+  │
+  └──► WebView cookie injection  ──► document.cookie via JS
+       (reads from secure storage)    (WebView uses cookies like a browser)
+            ▲
+            │ on WebView 401:
+            │ bridge delegates refresh back to AuthManager
+            │ (WebView never calls /api/oauth/refresh itself)
 ```
 
-Key principle: **native is the single source of truth for tokens.** The WebView receives tokens as cookies but never manages them. The refresh token never leaves native.
+Key principle: **native is the single source of truth for tokens.** The WebView receives tokens as cookies but never refreshes them — on 401, it delegates back to native via the bridge. This eliminates dual-writer race conditions between the native and web refresh paths.
+
+:::caution[Anti-pattern: dual token storage]
+Never store tokens in both platform secure storage (Keychain) AND `HTTPCookieStorage` / `CookieManager`. Using `URLSession.shared` (iOS) or `OkHttpClient` (Android) for the refresh request will silently store the response's `Set-Cookie` tokens in the system cookie store, creating a shadow copy that can diverge from secure storage. Use a dedicated HTTP session with cookie handling disabled for auth requests:
+
+```swift
+// iOS: dedicated session for auth requests — no cookie interference
+let config = URLSessionConfiguration.ephemeral
+config.httpShouldSetCookies = false
+config.httpCookieAcceptPolicy = .never
+let authSession = URLSession(configuration: config)
+```
+:::
 
 ### Why cookie injection
 
@@ -306,7 +343,7 @@ Cookie injection keeps the web frontend 100% standard — plain `fetch()` with `
 
 #### 1. Inject both cookies
 
-The WebView needs both `access_token` (for API requests) and `refresh_token` (so the web-side `fetchWithRefresh` fallback works):
+The WebView needs both `access_token` (for API requests) and `refresh_token` (as an emergency fallback if bridge delegation fails):
 
 | Cookie | Value source | Path | Expires |
 |--------|-------------|------|---------|
@@ -364,9 +401,25 @@ window.addEventListener("native-recheck-auth", () => {
 Dispatch this event **after** cookie injection, not before. On initial page load, add a short delay (~200ms) to ensure React has mounted its event listeners.
 :::
 
-#### 6. Native refresh token stays in secure storage only
+#### 6. WebView delegates refresh to native
 
-The refresh token cookie injected into the WebView is a **convenience fallback** — it allows the web-side `fetchWithRefresh` to work if native somehow fails to push a fresh access token. In normal operation, native proactively refreshes and pushes new cookies, so the web side never needs to refresh on its own.
+When the WebView's web frontend encounters a 401, it must **not** call `/api/oauth/refresh` directly. Instead, it delegates to the native layer via the bridge:
+
+```javascript
+// In fetchWithRefresh (web frontend):
+async function refreshAccessToken() {
+    if (window.__nativeBridge) {
+        // Hybrid WebView — delegate to native AuthManager
+        const result = await window.__nativeBridge.requestTokenRefresh();
+        return result.success;  // native refreshed + pushed new cookies
+    }
+    // Standalone browser — refresh via cookie as usual
+    const res = await fetch('/api/oauth/refresh', { method: 'POST', credentials: 'same-origin' });
+    return res.ok;
+}
+```
+
+This keeps native as the single token writer. The refresh token cookie injected in [rule 1](#1-inject-both-cookies) exists as an **emergency fallback** — if the bridge call fails or the native process is unresponsive, the web-side `fetchWithRefresh` can still refresh via cookie. But the primary path is always bridge → native → push cookies.
 
 **Never** store the refresh token in JavaScript-accessible storage (localStorage, sessionStorage, JS variables). The injected cookie is scoped to `/api/oauth` path and is only sent to the refresh endpoint.
 
@@ -381,14 +434,45 @@ sequenceDiagram
 
     Note over AM: Proactive refresh timer fires<br/>(60s before JWT exp)
     AM->>KS: Read refresh_token
-    AM->>BE: POST /api/oauth/refresh<br/>Cookie: refresh_token=...
+    AM->>BE: POST /api/oauth/refresh<br/>Body: { refresh_token: ... }
+    Note over AM: Uses dedicated HTTP session<br/>(no cookie storage)
     BE->>AM: 200 { access_token, refresh_token, expiresIn }
-    AM->>KS: Save new tokens
+    AM->>KS: Save new tokens (verify write succeeded)
     AM->>WV: JS: document.cookie = "access_token=<new>"
     AM->>WV: JS: document.cookie = "refresh_token=<new>"
     AM->>WV: JS: window.dispatchEvent("native-recheck-auth")
     AM->>AM: Schedule next refresh (new exp - 60s)
 ```
+
+### Lifecycle: WebView 401 — bridge delegation
+
+When the web frontend inside a WebView encounters a 401, it delegates refresh to native instead of calling the refresh endpoint directly:
+
+```mermaid
+sequenceDiagram
+    participant React as Web Frontend
+    participant Bridge as Native Bridge
+    participant AM as AuthManager
+    participant KS as Secure Storage
+    participant BE as Backend
+
+    React->>BE: fetch('/api/inbox') with cookie
+    BE->>React: 401 Unauthorized
+    Note over React: fetchWithRefresh detects 401
+    React->>Bridge: requestTokenRefresh()
+    Bridge->>AM: refreshAccessToken()
+    AM->>KS: Read refresh_token
+    AM->>BE: POST /api/oauth/refresh<br/>Body: { refresh_token: ... }
+    BE->>AM: 200 { access_token, refresh_token }
+    AM->>KS: Save new tokens
+    AM->>React: JS: document.cookie = "access_token=<new>"
+    AM->>React: JS: document.cookie = "refresh_token=<new>"
+    Bridge->>React: { success: true }
+    React->>BE: Retry fetch('/api/inbox') with new cookie
+    BE->>React: 200 OK
+```
+
+This keeps AuthManager as the single writer. The WebView never holds refresh state — it just receives fresh cookies from native after each refresh.
 
 ### Lifecycle: initial page load
 
@@ -431,11 +515,20 @@ For the new SwiftUI `WebPage` API (iOS 26+), use `webPage.callJavaScript()` for 
 
 ### What the web frontend needs
 
-The web frontend should work identically in browser and WebView. Minimal changes:
+The web frontend runs the same code in browser and WebView. The only behavioral difference is **how token refresh works**:
 
-1. **`fetchWithRefresh` stays** — defensive fallback for web-side token refresh via cookie
-2. **Listen for `native-recheck-auth`** — re-check auth when native signals a token change
-3. **Detect native context** — `window.isNativeApp` (set by native bridge polyfill) to hide browser-only UI like login redirects
+| Context | How `fetchWithRefresh` refreshes | Why |
+|---------|--------------------------------|-----|
+| **Standalone browser** | `POST /api/oauth/refresh` with cookies | Browser manages cookies natively |
+| **Inside native WebView** | Calls `window.__nativeBridge.requestTokenRefresh()` | Native is the single auth owner |
+
+The detection is a one-line check in the refresh function — `window.__nativeBridge` is set by the native bridge polyfill before React mounts.
+
+Other requirements:
+
+1. **Listen for `native-recheck-auth`** — re-check auth when native signals a token change (after refresh or foreground resume)
+2. **Detect native context** — `window.isNativeApp` (set by native bridge polyfill) to hide browser-only UI like login redirects
+3. **`fetchWithRefresh` cookie fallback stays** — if the bridge call fails (native process unresponsive), fall through to the standard cookie-based refresh as a safety net
 
 No special API URL schemes, no fetch overrides, no bridge proxying. Standard `fetch()` with `credentials: 'same-origin'`.
 
