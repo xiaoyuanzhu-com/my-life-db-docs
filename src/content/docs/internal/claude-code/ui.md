@@ -89,74 +89,82 @@ The system uses a pairing of a clean modern Sans-Serif and a highly legible Mono
 
 The UI is built as a stack of **"Blocks."** The page is a linear stream where each block handles a specific type of content.
 
-### Message-Level Bullets
+### Message-Level Bullets (MessageDot)
 
-Each message turn (user and assistant) has a bullet indicator to visually separate conversation turns:
+Every line in the session page starts with a dot from the `MessageDot` component (`message-dot.tsx`). The dot communicates **what kind of content** it is and **what state** it's in.
 
-*   **User messages:** No bullet - plain text, left-aligned
-*   **Assistant messages:** Gray bullet before content
-    *   **Color:** $text-secondary (`#5F6368` / `#6B7280`)
-    *   **Size:** 13px (unified across all message types)
-    *   **Font:** Monospace (ensures consistent bullet size across all contexts)
-    *   **Spacing:** 8px gap between bullet and content
-    *   **Alignment:** Top-aligned with first line of content
-*   **Tool calls:** Status-colored bullets
-    *   **Size:** 13px (identical to assistant messages)
-    *   **Font:** Monospace (same as assistant message bullets)
-    *   **Colors:**
-        *   Green (`#22C55E`) - Success/completed
-        *   Red (`#D92D20`) - Failed/error
-        *   Orange (`#F59E0B`) - Running/permission required
-        *   Gray (`#9CA3AF`) - Pending
-    *   **Outline circle** for pending state, **filled circle** for all other states
+#### Props
 
-**Implementation:**
+| Prop | Type | Required | Description |
+|------|------|----------|-------------|
+| `type` | `MessageDotType` | yes | The content category — determines color, character, and animation |
 
-The `MessageDot` component provides unified bullet styling across all message types:
+No `lineHeight` prop — all dots use mono alignment (`h-5`, 20px).
 
-```tsx
-// Shared MessageDot component (frontend/app/components/claude/chat/message-dot.tsx)
-export function MessageDot({ status = 'assistant' }: MessageDotProps) {
-  if (status === 'user') return null
+#### Dot Types
 
-  const getBulletColor = () => {
-    if (status === 'assistant') return '#5F6368' // Gray
-    if (status === 'failed') return '#D92D20' // Red
-    if (status === 'running') return '#F59E0B' // Orange
-    if (status === 'pending') return '#9CA3AF' // Gray
-    if (status === 'permission_required') return '#F59E0B' // Orange
-    return '#22C55E' // Green (success/completed)
-  }
+Each caller passes exactly one `type`. The component maps type → visual style internally.
 
-  const bulletChar = status === 'pending' ? '\u25CB' : '\u25CF'
+**Claude-WIP** — special category, the only one that uses terracotta
 
-  return (
-    <span
-      className="select-none font-mono text-[13px] leading-[1.5]"
-      style={{ color: getBulletColor() }}
-    >
-      {bulletChar}
-    </span>
-  )
-}
+| Type | Color | Char | Animation | Used in |
+|------|-------|------|-----------|---------|
+| `claude-wip` | `#E07A5F` terracotta | ● | pulse | `claude-wip.tsx` |
 
-// Usage in message blocks
-<div className="flex items-start gap-2">
-  <MessageDot status="assistant" />
-  <div className="flex-1 min-w-0">
-    <MessageContent content={message.content} />
-  </div>
-</div>
+**Assistant message** — the main conversational text
 
-// Usage in tool blocks
-<div className="flex items-start gap-2">
-  <MessageDot status={toolCall.status} />
-  <div className="flex-1 min-w-0">
-    <span className="font-semibold">Bash</span>
-    <span className="ml-2">git status</span>
-  </div>
-</div>
-```
+| Type | Color | Char | Animation | Used in |
+|------|-------|------|-----------|---------|
+| `assistant-wip` | `#5F6368` gray | ● | pulse | `streaming-response.tsx` |
+| `assistant` | `#5F6368` gray | ● | none | `message-block.tsx` |
+
+**Thinking block** — Claude's extended thinking
+
+| Type | Color | Char | Animation | Used in |
+|------|-------|------|-----------|---------|
+| `thinking-wip` | `#5F6368` gray | ● | pulse | `streaming-thinking.tsx` |
+| `thinking` | `#5F6368` gray | ● | none | `message-block.tsx` |
+
+**Tool call** — Read, Write, Bash, etc.
+
+| Type | Color | Char | Animation | Used in |
+|------|-------|------|-----------|---------|
+| `tool-pending` | `#9CA3AF` light gray | ○ | pulse | tool views |
+| `tool-completed` | `#22C55E` green | ● | none | tool views |
+| `tool-failed` | `#D92D20` red | ● | none | tool views |
+
+**Compacting** — context window compaction in progress
+
+| Type | Color | Char | Animation | Used in |
+|------|-------|------|-----------|---------|
+| `compacting` | `#5F6368` gray | ● | none | `message-block.tsx` |
+
+**System/meta** — init, session compacted, turn duration, summary, task notification
+
+| Type | Color | Char | Animation | Used in |
+|------|-------|------|-----------|---------|
+| `system` | `#22C55E` green | ● | none | `message-block.tsx` |
+
+#### Helper: `toolStatusToDotType()`
+
+Tool callers receive a `ToolStatus` from the data model. A helper maps it to `MessageDotType`:
+
+| ToolStatus | → MessageDotType |
+|------------|-----------------|
+| `pending` | `tool-pending` |
+| `running` | `tool-pending` |
+| `permission_required` | `tool-pending` |
+| `completed` | `tool-completed` |
+| `failed` | `tool-failed` |
+
+#### Design Rules
+
+*   **User messages:** No dot — plain text in a right-aligned pill
+*   **Outline circle** (`○`) only for `tool-pending`; all others use **filled circle** (`●`)
+*   **Pulse animation** for: `claude-wip`, `assistant-wip`, `thinking-wip`, `tool-pending`
+*   **All dots use mono alignment** — `h-5` (20px), matching `font-mono text-[13px] leading-[1.5]`
+*   **Font:** Monospace, `text-xs` — ensures consistent dot size across all contexts
+*   **Spacing:** 8px gap between dot and content (`gap-2`)
 
 ### A. The "User Prompt" Block
 User input that initiates the conversation or task.
