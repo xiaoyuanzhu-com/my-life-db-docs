@@ -129,7 +129,8 @@ Each caller passes exactly one `type`. The component maps type → visual style 
 
 | Type | Color | Char | Animation | Used in |
 |------|-------|------|-----------|---------|
-| `tool-pending` | `#9CA3AF` light gray | ○ | pulse | tool views |
+| `tool-wip` | `#9CA3AF` light gray | ● | pulse | tool views (turn still open) |
+| `tool-aborted` | `#9CA3AF` light gray | ○ | none | tool views (turn closed without result) |
 | `tool-completed` | `#22C55E` green | ● | none | tool views |
 | `tool-failed` | `#D92D20` red | ● | none | tool views |
 
@@ -145,23 +146,29 @@ Each caller passes exactly one `type`. The component maps type → visual style 
 |------|-------|------|-----------|---------|
 | `system` | `#22C55E` green | ● | none | `message-block.tsx` |
 
-#### Helper: `toolStatusToDotType()`
+#### Helper: `toolStatusToDotType(status, turnOpen?)`
 
 Tool callers receive a `ToolStatus` from the data model. A helper maps it to `MessageDotType`:
 
-| ToolStatus | → MessageDotType |
-|------------|-----------------|
-| `pending` | `tool-pending` |
-| `running` | `tool-pending` |
-| `permission_required` | `tool-pending` |
-| `completed` | `tool-completed` |
-| `failed` | `tool-failed` |
+```ts
+toolStatusToDotType(status: ToolStatus, turnOpen = true): MessageDotType
+```
+
+| ToolStatus | turnOpen=true | turnOpen=false |
+|------------|---------------|----------------|
+| `pending` | `tool-wip` | `tool-aborted` |
+| `running` | `tool-wip` | `tool-aborted` |
+| `permission_required` | `tool-wip` | `tool-aborted` |
+| `completed` | `tool-completed` | `tool-completed` |
+| `failed` | `tool-failed` | `tool-failed` |
+
+**Turn detection rule:** A tool is WIP if its turn is still open (no `result` message after the turn's `init`). If the turn closed but the tool never got a `tool_result`, it was aborted (user interrupt, server restart, etc.).
 
 #### Design Rules
 
 *   **User messages:** No dot — plain text in a right-aligned pill
-*   **Outline circle** (`○`) only for `tool-pending`; all others use **filled circle** (`●`)
-*   **Pulse animation** for: `claude-wip`, `assistant-wip`, `thinking-wip`, `tool-pending`
+*   **Outline circle** (`○`) only for `tool-aborted`; all others use **filled circle** (`●`)
+*   **Pulse animation** for: `claude-wip`, `assistant-wip`, `thinking-wip`, `tool-wip`
 *   **All dots use mono alignment** — `h-5` (20px), matching `font-mono text-[13px] leading-[1.5]`
 *   **Font:** Monospace, `text-xs` — ensures consistent dot size across all contexts
 *   **Spacing:** 8px gap between dot and content (`gap-2`)
