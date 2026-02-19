@@ -211,15 +211,11 @@ This keeps auth invisible to feature code. The app layer only needs to handle th
 
 When multiple requests fail with 401 simultaneously, clients must deduplicate refresh attempts. While one refresh is in-flight, queue other failed requests and retry them after it resolves. Use a mutex / single-flight pattern to prevent multiple concurrent refresh calls.
 
-### Proactive refresh (optional)
+### Foreground resume check
 
-To avoid the latency of a failed request → refresh → retry cycle, clients can proactively refresh before the token expires:
+On mobile, when the app returns to foreground after being backgrounded, check if the token is expiring soon (< 2 min) and refresh if so. This avoids a guaranteed 401 on the next API call after a long background period.
 
-1. After login or refresh, read `expiresIn` from the response (or parse the JWT `exp` claim)
-2. Schedule a background refresh for ~60 seconds before expiry
-3. On app resume/foreground, check if the token is expiring soon (< 2 min) and refresh if so
-
-This is an optimization — the reactive 401-based refresh is the required baseline.
+This is a lightweight supplement to the reactive 401-based refresh (the required baseline). **Do not use timer-based proactive refresh** (e.g., scheduling a refresh at JWT exp − 60s) — timers don't fire reliably when the OS suspends the app, waste refresh cycles when the app is idle, and add complexity with no benefit over the 401-based flow.
 
 ### Auth state
 
@@ -294,7 +290,7 @@ Native apps that embed WebViews (iOS, Android, desktop) need auth in **two netwo
 AuthManager (singleton, secure storage)
   │
   ├── Token storage ─────── Keychain / Android Keystore (single source of truth)
-  ├── Proactive refresh ─── JWT exp − 60s timer + foreground resume check
+  ├── Foreground check ──── refresh if token expiring soon (< 2 min)
   ├── Reactive refresh ──── on 401 from native API calls
   ├── Single-flight ─────── concurrent callers wait for one in-flight refresh
   │
@@ -423,7 +419,7 @@ This keeps native as the single token writer. The refresh token cookie injected 
 
 **Never** store the refresh token in JavaScript-accessible storage (localStorage, sessionStorage, JS variables). The injected cookie is scoped to `/api/oauth` path and is only sent to the refresh endpoint.
 
-### Lifecycle: native refresh pushes to WebView
+### Lifecycle: foreground resume refresh pushes to WebView
 
 ```mermaid
 sequenceDiagram
@@ -432,7 +428,7 @@ sequenceDiagram
     participant WV as WebView
     participant BE as Backend
 
-    Note over AM: Proactive refresh timer fires<br/>(60s before JWT exp)
+    Note over AM: App returns to foreground<br/>token expiring soon (< 2 min)
     AM->>KS: Read refresh_token
     AM->>BE: POST /api/oauth/refresh<br/>Body: { refresh_token: ... }
     Note over AM: Uses dedicated HTTP session<br/>(no cookie storage)
@@ -441,7 +437,6 @@ sequenceDiagram
     AM->>WV: JS: document.cookie = "access_token=<new>"
     AM->>WV: JS: document.cookie = "refresh_token=<new>"
     AM->>WV: JS: window.dispatchEvent("native-recheck-auth")
-    AM->>AM: Schedule next refresh (new exp - 60s)
 ```
 
 ### Lifecycle: WebView 401 — bridge delegation
