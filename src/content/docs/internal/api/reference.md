@@ -383,13 +383,17 @@ Content-Type: multipart/form-data
 
 **Note:** At least one of `text` or `files` must be provided.
 
+**Duplicate detection:** Uploaded files go through the same [content-aware duplicate detection](#duplicate-detection) as all upload endpoints. If a file with the same name and identical content already exists in the inbox, it is skipped. The `results` array in the response indicates per-file status.
+
 **Response (201 Created):**
 ```json
 {
-  "data": {
-    "path": "inbox/uuid.md",
-    "paths": ["inbox/uuid.md", "inbox/photo.jpg"]
-  }
+  "path": "inbox/uuid.md",
+  "paths": ["inbox/uuid.md", "inbox/photo.jpg"],
+  "results": [
+    { "path": "inbox/uuid.md", "status": "created" },
+    { "path": "inbox/photo.jpg", "status": "skipped" }
+  ]
 }
 ```
 
@@ -1266,27 +1270,99 @@ POST /api/ai/summarize
 
 ---
 
-## File Upload (TUS Protocol)
+## File Upload
+
+MyLifeDB supports two upload strategies. Clients choose based on file size:
+
+| Strategy | Endpoint | Best For |
+|----------|----------|----------|
+| Simple Upload | `PUT /api/upload/simple/*path` | Small files (typically ≤ 1 MB) |
+| TUS Protocol | `POST /api/upload/tus/` + finalize | Large files (resumable, chunked) |
+
+### Duplicate Detection
+
+All upload endpoints apply **content-aware duplicate detection** at finalization time:
+
+| Destination file exists? | Content identical? | Action | Per-file `status` |
+|--------------------------|-------------------|--------|-------------------|
+| No | — | Write new file | `"created"` |
+| Yes | Yes (same SHA-256) | **Skip** — no write, return existing path | `"skipped"` |
+| Yes | No | **Auto-rename** (macOS-style: `photo 2.jpg`) | `"created"` |
+
+Duplicate detection is **backend-only** — clients upload normally and inspect the response to learn what happened. No pre-check endpoint is needed.
+
+### Upload Response Format
+
+All upload endpoints return a unified response shape:
+
+```json
+{
+  "success": true,
+  "path": "inbox/document.pdf",
+  "paths": ["inbox/document.pdf", "inbox/photo.jpg"],
+  "results": [
+    { "path": "inbox/document.pdf", "status": "created" },
+    { "path": "inbox/photo.jpg", "status": "skipped" }
+  ]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `success` | boolean | Always `true` on 200 |
+| `path` | string | First file path (convenience) |
+| `paths` | string[] | All file paths (created + skipped) |
+| `results` | object[] | Per-file detail with `path` and `status` (`"created"` or `"skipped"`) |
+
+**Backward compatibility:** `path` and `paths` behave exactly as before. Skipped files appear in `paths` with their existing path. The `results` array is a new addition — older clients that ignore it continue to work.
+
+### Simple Upload
+
+Single-request upload for small files, bypassing TUS protocol overhead. The URL path specifies the destination.
+
+```http
+PUT /api/upload/simple/{destination}/{filename}
+```
+
+**Request:**
+- Body: raw file content
+- `Content-Type` header: MIME type of the file
+
+**Example:** `PUT /api/upload/simple/inbox/photo.jpg`
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "path": "inbox/photo.jpg",
+  "paths": ["inbox/photo.jpg"],
+  "results": [
+    { "path": "inbox/photo.jpg", "status": "created" }
+  ]
+}
+```
+
+### TUS Protocol (Resumable Upload)
 
 MyLifeDB uses the [TUS protocol](https://tus.io/) for resumable file uploads.
 
-### TUS Endpoints
+#### TUS Endpoints
 
 ```http
-POST /api/upload/tus/
-HEAD /api/upload/tus/:id
-PATCH /api/upload/tus/:id
-DELETE /api/upload/tus/:id
-OPTIONS /api/upload/tus/
+POST   /api/upload/tus/       # Create new upload
+HEAD   /api/upload/tus/:id    # Check upload status
+PATCH  /api/upload/tus/:id    # Upload chunk
+DELETE /api/upload/tus/:id    # Cancel upload
+OPTIONS /api/upload/tus/      # CORS preflight
 ```
 
 **Configuration:**
 - Max file size: 10GB
 - Base path: `/api/upload/tus/`
 
-### Finalize Upload
+#### Finalize Upload
 
-After TUS upload completes, finalize to move files to destination.
+After TUS upload completes, finalize to move files to destination. Duplicate detection happens at this step.
 
 ```http
 POST /api/upload/finalize
@@ -1311,10 +1387,12 @@ POST /api/upload/finalize
 **Response (200 OK):**
 ```json
 {
-  "data": {
-    "path": "inbox/document.pdf",
-    "paths": ["inbox/document.pdf"]
-  }
+  "success": true,
+  "path": "inbox/document.pdf",
+  "paths": ["inbox/document.pdf"],
+  "results": [
+    { "path": "inbox/document.pdf", "status": "created" }
+  ]
 }
 ```
 
@@ -1761,8 +1839,9 @@ interface UserSettings {
 
 ### File Uploads
 1. Use TUS protocol for large files (resumable)
-2. For small files, use `POST /api/inbox` with multipart
+2. For small files, use `POST /api/inbox` with multipart or `PUT /api/upload/simple/*path`
 3. Always finalize TUS uploads
+4. Handle duplicate detection: check `results[].status` for `"skipped"` vs `"created"` to show appropriate UI feedback
 
 ### Real-time Updates
 1. Connect to SSE `/api/notifications/stream`
