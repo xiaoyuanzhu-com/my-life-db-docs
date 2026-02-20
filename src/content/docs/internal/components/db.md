@@ -184,6 +184,7 @@ type Migration struct {
 | 1 | `migration_001_initial.go` | Initial schema (files, digests, sqlar, settings) |
 | 2 | `migration_002_search_tables.go` | Search index tables (meili, qdrant) |
 | 3 | `migration_003_fix_pins_schema.go` | Fix pins table schema |
+| 10 | `migration_010_epoch_timestamps.go` | Migrate all timestamp columns from TEXT (RFC3339) to INTEGER (Unix epoch milliseconds) |
 
 ### Adding a New Migration
 
@@ -223,7 +224,7 @@ type Migration struct {
 ```sql
 CREATE TABLE schema_version (
     version INTEGER PRIMARY KEY,
-    applied_at TEXT,
+    applied_at INTEGER,              -- Unix epoch milliseconds
     description TEXT
 );
 ```
@@ -242,9 +243,9 @@ CREATE TABLE files (
     hash TEXT,                     -- Content hash
     text_preview TEXT,             -- First ~500 chars for text files
     screenshot_sqlar TEXT,         -- SQLAR path for preview image
-    created_at TEXT,
-    modified_at TEXT,
-    indexed_at TEXT
+    created_at INTEGER,              -- Unix epoch milliseconds
+    modified_at INTEGER,             -- Unix epoch milliseconds
+    indexed_at INTEGER               -- Unix epoch milliseconds
 );
 ```
 
@@ -260,8 +261,8 @@ CREATE TABLE digests (
     sqlar_name TEXT,               -- SQLAR filename for binary data
     error TEXT,
     attempts INTEGER DEFAULT 0,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
+    created_at INTEGER NOT NULL,     -- Unix epoch milliseconds
+    updated_at INTEGER NOT NULL,     -- Unix epoch milliseconds
     UNIQUE(file_path, digester)
 );
 ```
@@ -272,7 +273,7 @@ CREATE TABLE digests (
 CREATE TABLE pins (
     id TEXT PRIMARY KEY,
     file_path TEXT UNIQUE NOT NULL,
-    created_at TEXT NOT NULL
+    created_at INTEGER NOT NULL       -- Unix epoch milliseconds
 );
 ```
 
@@ -282,7 +283,7 @@ CREATE TABLE pins (
 CREATE TABLE settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at INTEGER NOT NULL       -- Unix epoch milliseconds
 );
 ```
 

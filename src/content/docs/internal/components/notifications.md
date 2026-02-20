@@ -42,7 +42,7 @@ const (
 
 type Event struct {
     Type      EventType `json:"type"`
-    Timestamp string    `json:"timestamp"`      // RFC3339 format, auto-set
+    Timestamp int64     `json:"timestamp"`      // Unix millisecond timestamp, auto-set
     Path      string    `json:"path,omitempty"` // File path for file-specific events
     Data      any       `json:"data,omitempty"` // Additional event data
 }
@@ -89,8 +89,8 @@ Subscriber channels are buffered with **10 events** (not 100). When slow clients
 ```go
 func (s *Service) Notify(event Event) {
     // Auto-set timestamp if not provided
-    if event.Timestamp == "" {
-        event.Timestamp = time.Now().UTC().Format(time.RFC3339)
+    if event.Timestamp == 0 {
+        event.Timestamp = time.Now().UnixMilli()
     }
 
     for ch := range s.subscribers {
@@ -121,7 +121,7 @@ func (h *Handlers) NotificationStream(c *gin.Context) {
     // Send initial connected event
     sendSSEEventGin(c, notifications.Event{
         Type:      notifications.EventConnected,
-        Timestamp: time.Now().UTC().Format(time.RFC3339),
+        Timestamp: time.Now().UnixMilli(),
     })
 
     // Heartbeat every 30 seconds (keeps connection alive behind proxies)
@@ -302,7 +302,7 @@ function HomePage() {
 func (s *Service) NotifyInboxChanged() {
     s.Notify(Event{
         Type:      EventInboxChanged,
-        Timestamp: time.Now().UTC().Format(time.RFC3339),
+        Timestamp: time.Now().UnixMilli(),
     })
 }
 
@@ -310,7 +310,7 @@ func (s *Service) NotifyInboxChanged() {
 func (s *Service) NotifyPinChanged(path string) {
     s.Notify(Event{
         Type:      EventPinChanged,
-        Timestamp: time.Now().UTC().Format(time.RFC3339),
+        Timestamp: time.Now().UnixMilli(),
         Path:      path,
     })
 }
@@ -319,7 +319,7 @@ func (s *Service) NotifyPinChanged(path string) {
 func (s *Service) NotifyPreviewUpdated(path string, previewType string) {
     s.Notify(Event{
         Type:      EventPreviewUpdated,
-        Timestamp: time.Now().UTC().Format(time.RFC3339),
+        Timestamp: time.Now().UnixMilli(),
         Path:      path,
         Data: map[string]interface{}{
             "previewType": previewType,

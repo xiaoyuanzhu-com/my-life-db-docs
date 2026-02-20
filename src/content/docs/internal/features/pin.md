@@ -39,9 +39,9 @@ After jumping to a pinned item, users can scroll up/down normally to load adjace
 CREATE TABLE pins (
   id TEXT PRIMARY KEY,
   file_path TEXT NOT NULL UNIQUE,
-  pinned_at TEXT NOT NULL,
+  pinned_at INTEGER NOT NULL,        -- Unix epoch milliseconds
   display_text TEXT,
-  created_at TEXT NOT NULL,
+  created_at INTEGER NOT NULL,       -- Unix epoch milliseconds
   FOREIGN KEY (file_path) REFERENCES files(path) ON DELETE CASCADE
 );
 
@@ -98,7 +98,7 @@ List all pinned inbox items.
     {
       "path": "inbox/example.md",
       "name": "example.md",
-      "pinnedAt": "2025-01-26T10:00:00.000Z",
+      "pinnedAt": 1737885600000,
       "displayText": "Important note about..."
     }
   ]
@@ -164,7 +164,7 @@ Pin changes are synchronized across all clients using Server-Sent Events:
 {
   type: 'pin-changed',
   path: 'inbox/example.md',
-  timestamp: '2025-01-26T10:00:00.000Z'
+  timestamp: 1737885600000
 }
 ```
 
@@ -240,15 +240,15 @@ Pin changes are synchronized across all clients using Server-Sent Events:
 export interface PinRecord {
   id: string;
   filePath: string;
-  pinnedAt: string;
+  pinnedAt: number;        // Unix millisecond timestamp
   displayText: string | null;
-  createdAt: string;
+  createdAt: number;       // Unix millisecond timestamp
 }
 
 export interface PinnedItem {
   path: string;
   name: string;
-  pinnedAt: string;
+  pinnedAt: number;        // Unix millisecond timestamp
   displayText: string;
 }
 

@@ -128,7 +128,7 @@ All messages from server follow the `SessionMessage` structure from Claude's JSO
   "type": "user",
   "uuid": "c0a21d6f-3652-4f86-a36b-b98d75a15298",
   "parentUuid": null,
-  "timestamp": "2026-01-19T04:45:15.012Z",
+  "timestamp": 1737258315012,
   "message": {
     "role": "user",
     "content": "What files are in this directory?"
@@ -142,7 +142,7 @@ All messages from server follow the `SessionMessage` structure from Claude's JSO
   "type": "assistant",
   "uuid": "a953b709-f2f8-46e3-8c99-4f9b01f8e6d5",
   "parentUuid": "c0a21d6f-3652-4f86-a36b-b98d75a15298",
-  "timestamp": "2026-01-19T04:45:17.971Z",
+  "timestamp": 1737258317971,
   "message": {
     "role": "assistant",
     "model": "claude-sonnet-4-5-20250929",
@@ -169,7 +169,7 @@ All messages from server follow the `SessionMessage` structure from Claude's JSO
   "type": "assistant",
   "uuid": "75819da3-58d5-4d30-a167-a1449fd87738",
   "parentUuid": "a953b709-f2f8-46e3-8c99-4f9b01f8e6d5",
-  "timestamp": "2026-01-19T04:45:18.615Z",
+  "timestamp": 1737258318615,
   "message": {
     "role": "assistant",
     "content": [
@@ -192,7 +192,7 @@ All messages from server follow the `SessionMessage` structure from Claude's JSO
   "type": "user",
   "uuid": "8f3c5d2a-1234-5678-9abc-def012345678",
   "parentUuid": "75819da3-58d5-4d30-a167-a1449fd87738",
-  "timestamp": "2026-01-19T04:45:19.123Z",
+  "timestamp": 1737258319123,
   "message": {
     "role": "user",
     "content": [
@@ -216,7 +216,7 @@ All messages from server follow the `SessionMessage` structure from Claude's JSO
   "type": "progress",
   "uuid": "26978643-ffbd-4e71-8fe2-16f258a3ce06",
   "parentUuid": "67d14f47-796f-4d74-89a2-355aca40aa7b",
-  "timestamp": "2026-01-21T09:36:55.890Z",
+  "timestamp": 1737448615890,
   "data": {
     "type": "hook_progress",
     "hookEvent": "PreToolUse",
@@ -232,7 +232,7 @@ All messages from server follow the `SessionMessage` structure from Claude's JSO
 {
   "type": "queue-operation",
   "operation": "dequeue",
-  "timestamp": "2026-01-21T09:56:54.360Z",
+  "timestamp": 1737449814360,
   "sessionId": "7afc3e49-d4dd-410a-8fc2-8d26cf6e1f80"
 }
 ```
@@ -243,7 +243,7 @@ All messages from server follow the `SessionMessage` structure from Claude's JSO
   "type": "assistant",
   "uuid": "b812dc15-5444-460a-bae4-2111a7f2c2f8",
   "parentUuid": "...",
-  "timestamp": "2026-01-21T12:21:15.789Z",
+  "timestamp": 1737458475789,
   "message": {
     "role": "assistant",
     "model": "claude-opus-4-5-20251101",
@@ -584,7 +584,7 @@ function convertToMessage(sessionMsg: SessionMessage): Message {
     content: textContent,
     toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
     thinking: thinkingBlocks.length > 0 ? thinkingBlocks : undefined,
-    timestamp: new Date(sessionMsg.timestamp).getTime()
+    timestamp: sessionMsg.timestamp
   }
 }
 ```

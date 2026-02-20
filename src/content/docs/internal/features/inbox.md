@@ -122,7 +122,7 @@ API endpoint: `/api/inbox`
 | `around` | Cursor to center on (for pin navigation) |
 
 **Cursor format:** `{created_at}:{path}`
-- Example: `2025-01-26T10:00:00.000Z:inbox/photo.jpg`
+- Example: `1737885600000:inbox/photo.jpg`
 - Composite key ensures stable, deterministic ordering
 
 **Response structure:**
@@ -741,7 +741,7 @@ List pinned inbox items.
   items: Array<{
     path: string;
     name: string;
-    pinnedAt: string;
+    pinnedAt: number;   // Unix millisecond timestamp
     displayText: string;
     cursor: string;  // For direct navigation
   }>;

@@ -22,7 +22,7 @@ This document defines the unified response structure for all MyLifeDB API endpoi
   "data": {
     "id": "uuid",
     "name": "Example",
-    "createdAt": "2024-01-15T10:30:00Z"
+    "createdAt": 1705318200000
   }
 }
 ```
@@ -50,7 +50,7 @@ This document defines the unified response structure for all MyLifeDB API endpoi
   "data": {
     "id": "new-uuid",
     "name": "New Item",
-    "createdAt": "2024-01-15T10:30:00Z"
+    "createdAt": 1705318200000
   }
 }
 ```

@@ -346,8 +346,8 @@ GET /api/inbox
       "size": 1024,
       "mimeType": "text/markdown",
       "hash": "sha256:abc123...",
-      "modifiedAt": "2024-01-15T10:30:00Z",
-      "createdAt": "2024-01-15T10:30:00Z",
+      "modifiedAt": 1705318200000,
+      "createdAt": 1705318200000,
       "digests": [],
       "textPreview": "First 500 characters of content...",
       "screenshotSqlar": "screenshots/abc123.png",
@@ -356,8 +356,8 @@ GET /api/inbox
   ],
   "pagination": {
     "cursors": {
-      "first": "2024-01-15T10:30:00Z:inbox/file.md",
-      "last": "2024-01-14T08:00:00Z:inbox/other.md"
+      "first": "1705318200000:inbox/file.md",
+      "last": "1705222800000:inbox/other.md"
     },
     "hasMore": {
       "older": true,
@@ -416,8 +416,8 @@ GET /api/inbox/:filename
     "size": 1024,
     "mimeType": "text/markdown",
     "hash": "sha256:abc123...",
-    "modifiedAt": "2024-01-15T10:30:00Z",
-    "createdAt": "2024-01-15T10:30:00Z",
+    "modifiedAt": 1705318200000,
+    "createdAt": 1705318200000,
     "textPreview": "Preview text...",
     "screenshotSqlar": "screenshots/abc123.png",
     "digests": [
@@ -427,8 +427,8 @@ GET /api/inbox/:filename
         "digester": "tags",
         "status": "done",
         "content": "{\"tags\": [\"work\", \"notes\"]}",
-        "createdAt": "2024-01-15T10:30:00Z",
-        "updatedAt": "2024-01-15T10:35:00Z"
+        "createdAt": 1705318200000,
+        "updatedAt": 1705318500000
       }
     ]
   }
@@ -453,7 +453,7 @@ PUT /api/inbox/:filename
 {
   "data": {
     "path": "inbox/file.md",
-    "modifiedAt": "2024-01-15T12:00:00Z"
+    "modifiedAt": 1705323600000
   }
 }
 ```
@@ -479,9 +479,9 @@ GET /api/inbox/pinned
     {
       "path": "inbox/important.md",
       "name": "important.md",
-      "pinnedAt": "2024-01-15T10:30:00Z",
+      "pinnedAt": 1705318200000,
       "displayText": "First line of content or filename",
-      "cursor": "2024-01-15T10:30:00Z:inbox/important.md"
+      "cursor": "1705318200000:inbox/important.md"
     }
   ]
 }
@@ -573,7 +573,7 @@ GET /api/library/tree
             "path": "meeting.md",
             "type": "file",
             "size": 2048,
-            "modifiedAt": "2024-01-15T10:30:00Z"
+            "modifiedAt": 1705318200000
           }
         ]
       }
@@ -603,8 +603,8 @@ GET /api/library/files
     "size": 2048,
     "mimeType": "text/markdown",
     "hash": "sha256:abc123...",
-    "modifiedAt": "2024-01-15T10:30:00Z",
-    "createdAt": "2024-01-10T14:00:00Z",
+    "modifiedAt": 1705318200000,
+    "createdAt": 1704895200000,
     "textPreview": "Meeting notes from...",
     "digests": []
   }
@@ -726,7 +726,7 @@ PUT /api/library/pins
   "data": {
     "path": "inbox/important.md",
     "isPinned": true,
-    "pinnedAt": "2024-01-15T10:30:00Z"
+    "pinnedAt": 1705318200000
   }
 }
 ```
@@ -776,8 +776,8 @@ GET /api/search
       "isFolder": false,
       "size": 2048,
       "mimeType": "text/markdown",
-      "modifiedAt": "2024-01-15T10:30:00Z",
-      "createdAt": "2024-01-10T14:00:00Z",
+      "modifiedAt": 1705318200000,
+      "createdAt": 1704895200000,
       "digests": [],
       "score": 0.95,
       "snippet": "...relevant excerpt with <em>highlighted</em> terms...",
@@ -894,8 +894,8 @@ GET /api/digest/files/*path
         "digester": "image-captioning",
         "status": "done",
         "content": "{\"caption\": \"A sunset over the ocean\"}",
-        "createdAt": "2024-01-15T10:30:00Z",
-        "updatedAt": "2024-01-15T10:35:00Z"
+        "createdAt": 1705318200000,
+        "updatedAt": 1705318500000
       }
     ]
   }
@@ -960,8 +960,8 @@ GET /api/people
     {
       "id": "uuid",
       "displayName": "John Doe",
-      "createdAt": "2024-01-15T10:30:00Z",
-      "updatedAt": "2024-01-15T10:30:00Z"
+      "createdAt": 1705318200000,
+      "updatedAt": 1705318200000
     }
   ]
 }
@@ -986,8 +986,8 @@ POST /api/people
   "data": {
     "id": "uuid",
     "displayName": "John Doe",
-    "createdAt": "2024-01-15T10:30:00Z",
-    "updatedAt": "2024-01-15T10:30:00Z"
+    "createdAt": 1705318200000,
+    "updatedAt": 1705318200000
   }
 }
 ```
@@ -1006,16 +1006,16 @@ GET /api/people/:id
   "data": {
     "id": "uuid",
     "displayName": "John Doe",
-    "createdAt": "2024-01-15T10:30:00Z",
-    "updatedAt": "2024-01-15T10:30:00Z",
+    "createdAt": 1705318200000,
+    "updatedAt": 1705318200000,
     "clusters": [
       {
         "id": "cluster-uuid",
         "peopleId": "uuid",
         "clusterType": "face",
         "sampleCount": 15,
-        "createdAt": "2024-01-15T10:30:00Z",
-        "updatedAt": "2024-01-16T14:00:00Z"
+        "createdAt": 1705318200000,
+        "updatedAt": 1705417200000
       }
     ]
   }
@@ -1041,7 +1041,7 @@ PUT /api/people/:id
   "data": {
     "id": "uuid",
     "displayName": "John Smith",
-    "updatedAt": "2024-01-15T12:00:00Z"
+    "updatedAt": 1705323600000
   }
 }
 ```
@@ -1381,9 +1381,9 @@ Connection: keep-alive
 
 **Event Format:**
 ```
-data: {"type":"inbox-changed","timestamp":"2024-01-15T10:30:00Z"}
+data: {"type":"inbox-changed","timestamp":1705318200000}
 
-data: {"type":"library-changed","path":"notes/file.md","action":"create","timestamp":"2024-01-15T10:31:00Z"}
+data: {"type":"library-changed","path":"notes/file.md","action":"create","timestamp":1705318260000}
 
 : heartbeat
 ```
@@ -1507,8 +1507,8 @@ GET /api/claude/sessions
       "id": "04361723-fde4-4be9-8e44-e2b0f9b524c4",
       "title": "Refactoring auth system",
       "workingDir": "/path/to/project",
-      "createdAt": "2024-01-15T10:30:00Z",
-      "lastActivity": "2024-01-15T11:45:00Z",
+      "createdAt": 1705318200000,
+      "lastActivity": 1705322700000,
       "mode": "ui",
       "status": "active",
       "processId": 12345,
@@ -1541,7 +1541,7 @@ GET /api/claude/sessions/all
   "data": [...sessions...],
   "pagination": {
     "hasMore": true,
-    "nextCursor": "2024-01-14T08:00:00Z",
+    "nextCursor": "1705222800000",
     "totalCount": 156
   }
 }
@@ -1571,7 +1571,7 @@ POST /api/claude/sessions
     "id": "04361723-fde4-4be9-8e44-e2b0f9b524c4",
     "title": "Feature implementation",
     "workingDir": "/path/to/project",
-    "createdAt": "2024-01-15T10:30:00Z",
+    "createdAt": 1705318200000,
     "mode": "ui",
     "status": "active"
   }
@@ -1693,8 +1693,8 @@ interface FileRecord {
   size?: number;          // Bytes (null for folders)
   mimeType?: string;      // MIME type
   hash?: string;          // SHA-256 hash
-  modifiedAt: string;     // ISO 8601 timestamp
-  createdAt: string;      // ISO 8601 timestamp
+  modifiedAt: number;     // Unix millisecond timestamp
+  createdAt: number;      // Unix millisecond timestamp
   textPreview?: string;   // First ~500 chars of text content
   screenshotSqlar?: string; // Path to screenshot in SQLAR
 }
@@ -1712,8 +1712,8 @@ interface Digest {
   sqlarName?: string;     // Path to artifact in SQLAR
   error?: string;         // Error message if failed
   attempts: number;       // Number of processing attempts
-  createdAt: string;      // ISO 8601 timestamp
-  updatedAt: string;      // ISO 8601 timestamp
+  createdAt: number;      // Unix millisecond timestamp
+  updatedAt: number;      // Unix millisecond timestamp
 }
 ```
 
@@ -1723,8 +1723,8 @@ interface Digest {
 interface Person {
   id: string;             // UUID
   displayName: string;
-  createdAt: string;      // ISO 8601 timestamp
-  updatedAt: string;      // ISO 8601 timestamp
+  createdAt: number;      // Unix millisecond timestamp
+  updatedAt: number;      // Unix millisecond timestamp
   clusters?: PersonCluster[];
 }
 ```

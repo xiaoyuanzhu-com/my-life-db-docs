@@ -31,8 +31,8 @@ interface Digest {
   sqlarName: string | null; // Path to binary artifacts in SQLAR (e.g., screenshots)
   error: string | null;    // Error message if failed
   attempts: number;        // Retry count (max 3)
-  createdAt: string;       // ISO timestamp
-  updatedAt: string;       // ISO timestamp
+  createdAt: number;       // Unix millisecond timestamp
+  updatedAt: number;       // Unix millisecond timestamp
 }
 
 type DigestStatus =
