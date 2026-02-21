@@ -4,7 +4,7 @@ sidebar:
   order: 2
 ---
 
-MyLifeDB can collect data from many sources across your Apple devices. Data collectors are organized into five categories: Time, Health, Diet, Communication, and Content.
+MyLifeDB can collect data from many sources across your Apple devices. Data collectors are organized into six categories: Time, Productivity, Health, Diet, Communication, and Content.
 
 Each data source has a status indicating its current availability:
 
@@ -36,6 +36,8 @@ Events, meetings, and schedule blocks.
 | Calendar Events | Meetings, appointments, time blocks | All | Available |
 | Meeting Time | Hours in meetings per day/week | All | Available |
 
+## Productivity
+
 ### Focus Sessions
 Deep work blocks and focus mode tracking.
 
@@ -44,6 +46,24 @@ Deep work blocks and focus mode tracking.
 | Focus Mode | Active focus mode and schedule | iPhone, Mac | Limited |
 | Deep Work Sessions | Focused uninterrupted work blocks | All | Manual |
 | Active App Time | Time per application on Mac | Mac | Limited |
+
+### Developer Work
+Git commits, code written, IDE usage.
+
+| Source | Description | Platform | Status |
+|--------|-------------|----------|--------|
+| Git Commits | Commit frequency, repos, LOC changed | Mac | Available |
+| Git Activity | Branches, PRs, code review | Mac | Available |
+| Terminal History | Shell commands executed | Mac | Available |
+| Code Written | Lines of code by language | Mac | Available |
+| IDE Usage | Time in Xcode, VS Code, etc. | Mac | Limited |
+
+### AI Chats
+Claude, ChatGPT conversation sessions.
+
+| Source | Description | Platform | Status |
+|--------|-------------|----------|--------|
+| .claude Sessions | Claude Code session history | Mac | Available |
 
 ## Health
 
@@ -206,30 +226,12 @@ Reading progress and highlights.
 | Books & Reading | Titles, reading time, progress | iPhone | Limited |
 | Books Finished | Completed books list | All | Manual |
 
-### AI Chats
-Claude, ChatGPT conversation sessions.
-
-| Source | Description | Platform | Status |
-|--------|-------------|----------|--------|
-| .claude Sessions | Claude Code session history | Mac | Available |
-
 ### Music
 Listening history, artists, genres.
 
 | Source | Description | Platform | Status |
 |--------|-------------|----------|--------|
 | Music Listening | Songs, artists, genres, duration | All | Available |
-
-### Developer Work
-Git commits, code written, IDE usage.
-
-| Source | Description | Platform | Status |
-|--------|-------------|----------|--------|
-| Git Commits | Commit frequency, repos, LOC changed | Mac | Available |
-| Git Activity | Branches, PRs, code review | Mac | Available |
-| Terminal History | Shell commands executed | Mac | Available |
-| Code Written | Lines of code by language | Mac | Available |
-| IDE Usage | Time in Xcode, VS Code, etc. | Mac | Limited |
 
 ### Photos
 Photos taken and screenshots.
