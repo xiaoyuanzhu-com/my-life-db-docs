@@ -1606,6 +1606,37 @@ Task notification messages are sent when a background task (e.g., a background s
 
 **Rendering:** Rendered as a single-line system message with a status-colored dot (green for completed, red for failed) and the `summary` text. Follows the same pattern as `turn_duration`.
 
+**5i. Task Notification User Message (XML Format -- Skipped)**
+
+When a Task sub-agent completes, Claude Code also injects a **user-type message** whose content is a `<task-notification>` XML block. This is distinct from the system `task_notification` message above. The user message is system-injected (not user-typed) and is redundant with the Task `tool_result`, so it is **skipped from rendering**.
+
+**Example content** (the `message.content` field of a `type: "user"` message):
+```xml
+<task-notification>
+<task-id>bb53ba9</task-id>
+<tool-use-id>toolu_01XYZ...</tool-use-id>
+<status>completed</status>
+<summary>Task completed successfully</summary>
+<result>The sub-agent's final answer text...</result>
+<usage>
+Input tokens: 12345
+Output tokens: 6789
+Total tokens: 19134
+</usage>
+</task-notification>
+Full transcript available at: /tmp/claude-1000/.../tasks/bb53ba9.output
+```
+
+**Key characteristics:**
+- `type: "user"` with `message.content` as a string
+- Content starts with `<task-notification>` XML
+- Has **trailing text outside the XML** ("Full transcript available at: ...")
+- Contains nested tags: `task-id`, `tool-use-id`, `status`, `summary`, `result`, `usage`
+
+**Why Skip:** This message is system-injected, not user-typed. The same information is available in the Task `tool_result` (which is rendered as part of the Task tool block). Displaying it would show confusing XML in the chat.
+
+**Filtering:** Skipped via **prefix-based check** in both frontend (`isSkippedUserMessage`) and backend (`filterSystemTags`). The trailing text outside the XML prevents the generic tag-based filter from working, hence the prefix approach.
+
 **6. Progress Messages**
 
 Progress messages report real-time updates during long-running operations. The `data.type` field determines the progress subtype.

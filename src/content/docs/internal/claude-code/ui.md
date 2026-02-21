@@ -1356,6 +1356,7 @@ Some message types are intentionally **not rendered** in the chat interface as s
 | `type: "result"` | Turn terminator (stdout only, not persisted). Contains summary stats. Used for state derivation, not display. |
 | `isMeta: true` | System-injected context messages (e.g., `<local-command-caveat>`) not meant for display |
 | Skipped XML tags only | User messages containing ONLY skipped XML tags (no other content) |
+| `<task-notification>` prefix | User messages starting with `<task-notification>` XML — system-injected Task sub-agent completion notifications, redundant with `tool_result`. Skipped via prefix check (has trailing text outside XML). |
 | `type: "progress"` | Progress messages are rendered inside their parent tools, not as standalone messages |
 | `system.subtype: hook_response` | Rendered inside hook_started via hookResponseMap, not as standalone message |
 | `system.subtype: status` | Rendered as **transient indicator** at end of message list when non-null (e.g., "Compacting..."). Disappears when status is null. |
@@ -1411,7 +1412,15 @@ Claude Code stores subagent conversations in separate JSONL files (`{sessionId}/
 
 **Skipped XML Tags:**
 
-User messages are skipped if their content consists **entirely** of these XML tags (whitespace allowed between tags, but no other content):
+User messages containing system-injected XML are skipped using two filtering mechanisms:
+
+**1. Prefix-based filters** -- if the content starts with one of these tags, the entire message is skipped regardless of trailing content:
+
+| Tag | Description |
+|-----|-------------|
+| `<task-notification>` | Task sub-agent completion notification. Contains nested tags (`task-id`, `tool-use-id`, `status`, `summary`, `result`, `usage`) plus trailing text ("Full transcript available at: ..."). System-injected, not user-typed, and redundant with the Task `tool_result`. |
+
+**2. Tag-based filters** -- if the content consists **entirely** of these XML tags (whitespace allowed between tags, but no other content):
 
 | Tag | Description |
 |-----|-------------|
@@ -1421,7 +1430,7 @@ User messages are skipped if their content consists **entirely** of these XML ta
 | `<local-command-caveat>` | Caveat about local commands |
 | `<local-command-stdout>` | Stdout from local command execution |
 
-> **Design Principle:** All other message types should be rendered. Unknown types are displayed as raw JSON to aid debugging and ensure no messages are silently lost. The XML tag check is **strict**: if ANY tag is not in the skip list, or if there's any non-whitespace content outside the tags, the message is rendered.
+> **Design Principle:** All other message types should be rendered. Unknown types are displayed as raw JSON to aid debugging and ensure no messages are silently lost. The tag-based XML check is **strict**: if ANY tag is not in the skip list, or if there's any non-whitespace content outside the tags, the message is rendered. Prefix-based filters are less strict because those tags always indicate system-injected content that is never user-typed.
 
 **file-history-snapshot Example:**
 
