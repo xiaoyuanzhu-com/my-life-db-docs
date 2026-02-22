@@ -996,11 +996,12 @@ When a Task tool spawns a subagent, a `task_started` system message is emitted t
 {
   "type": "system",
   "subtype": "task_started",
-  "description": "Explore iOS inbox codebase",
-  "task_id": "a3acfec",
+  "description": "Research product format options",
+  "task_id": "a9108c1a2c763a2ec",
   "task_type": "local_agent",
-  "session_id": "ce8a7595-3a98-467b-b1dd-46eecd400cab",
-  "uuid": "a2bb2830-0c82-434a-984f-bff33b4fc2c5"
+  "tool_use_id": "toolu_01Xk9WqdQFjA3XGFzDpfH8hR",
+  "session_id": "e37dd4d7-9721-49e4-bd4e-49d7652c8da6",
+  "uuid": "5a6d7855-9d4e-4e99-8008-6c54e56bb33c"
 }
 ```
 
@@ -1010,12 +1011,13 @@ When a Task tool spawns a subagent, a `task_started` system message is emitted t
 |-------|------|-------------|
 | `type` | string | Always `"system"` |
 | `subtype` | string | Always `"task_started"` |
-| `description` | string | Human-readable description of the task (e.g., "Explore iOS inbox codebase") |
-| `task_id` | string | Agent ID (7-char hex, e.g., "a3acfec") - same format as `agentId` in `agent_progress` |
+| `description` | string | Human-readable description of the task (e.g., "Research product format options") |
+| `task_id` | string | Agent ID — variable length hex string (e.g., "a3acfec" or "a9108c1a2c763a2ec"). Same concept as `agentId` in `agent_progress`. |
 | `task_type` | string | Type of task (e.g., "local_agent") |
+| `tool_use_id` | string | Links back to the parent Task `tool_use` block that spawned this agent. Same value as the `id` field on the corresponding `tool_use` content block. |
 | `session_id` | string | Session UUID |
 
-**Rendering:** Skipped — filtered out in `session-messages.tsx`. The `task_started` message is redundant with the Task tool_use block, which already displays the same `description` in its header. Unlike `agent_progress` (which has `parentToolUseID`), `task_started` has no field to link it back to the parent tool_use (`task_id` is the agent ID, not the `tool_use.id`), so it cannot be merged into the tool block either.
+**Rendering:** Skipped — filtered out in `session-messages.tsx`. The `task_started` message is redundant with the Task `tool_use` block, which already displays the same `description` in its header. Note: `tool_use_id` provides a linking field back to the parent tool block (similar to `parentToolUseID` on `agent_progress`), but since the message is still fully redundant with the tool block header, it remains skipped.
 
 ---
 
@@ -1579,8 +1581,9 @@ In historical sessions, the last status is typically `null` (operation complete)
 
 **5h. Task Notification (Background Task Completion)**
 
-Task notification messages are sent when a background task (e.g., a background shell command launched via the Task tool with `run_in_background: true`) completes or fails. They provide a summary of the task outcome and a reference to the task output file.
+Task notification messages are sent when a background task (e.g., a background shell command launched via the Task tool with `run_in_background: true`, or a completed subagent) completes or fails. They provide a summary of the task outcome and optionally a reference to the task output file and execution statistics.
 
+**Example (background command):**
 ```json
 {
   "output_file": "/tmp/claude-1000/-home-xiaoyuanzhu-my-life-db-data/tasks/bb53ba9.output",
@@ -1594,17 +1597,39 @@ Task notification messages are sent when a background task (e.g., a background s
 }
 ```
 
+**Example (agent task with usage stats):**
+```json
+{
+  "output_file": "",
+  "session_id": "e37dd4d7-9721-49e4-bd4e-49d7652c8da6",
+  "status": "completed",
+  "subtype": "task_notification",
+  "summary": "Agent \"Research product format options\" completed",
+  "task_id": "a9108c1a2c763a2ec",
+  "tool_use_id": "toolu_01Xk9WqdQFjA3XGFzDpfH8hR",
+  "type": "system",
+  "usage": {
+    "duration_ms": 1042266,
+    "tool_uses": 24,
+    "total_tokens": 61306
+  },
+  "uuid": "cbcc3b9b-1d0b-4d0c-b51d-526296164d4b"
+}
+```
+
 **Fields**:
 | Field | Type | Description |
 |-------|------|-------------|
 | `subtype` | string | Always `"task_notification"` |
-| `task_id` | string | Background task identifier (e.g., `"bb53ba9"`) |
+| `task_id` | string | Task identifier (e.g., `"bb53ba9"` for background commands, `"a9108c1a2c763a2ec"` for agents) |
 | `status` | string | Task outcome: `"completed"` or other status values |
 | `summary` | string | Human-readable description of the task outcome |
-| `output_file` | string | Path to the task's output file on disk |
+| `output_file` | string | Path to the task's output file on disk. Empty string for agent tasks. |
+| `tool_use_id` | string | Links back to the parent Task `tool_use` block that spawned this task. Present on agent tasks. |
+| `usage` | object | Execution statistics for agent tasks. Contains `duration_ms` (number), `tool_uses` (number), and `total_tokens` (number). |
 | `session_id` | string | Session UUID that spawned the background task |
 
-**Rendering:** Rendered as a single-line system message with a status-colored dot (green for completed, red for failed) and the `summary` text. Follows the same pattern as `turn_duration`.
+**Rendering:** Rendered as a single-line system message with a status-colored dot (green for completed, red for failed) and the `summary` text. When `usage` stats are present, they are shown inline after the summary (e.g., "17m 22s · 24 tool uses · 61K tokens"). Follows the same pattern as `turn_duration`.
 
 **5i. Task Notification User Message (XML Format -- Skipped)**
 

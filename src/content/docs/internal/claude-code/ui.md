@@ -1330,7 +1330,7 @@ These are top-level session events that are rendered as simple status indicators
 | `system.subtype: init` | System init block | Shows session initialization with tools, model, MCP servers |
 | `system.subtype: turn_duration` | "Turn completed in Xm Ys" | Turn duration telemetry showing how long a turn took |
 | `system.subtype: hook_started` | "Hook {status}: {hook_name}" + collapsible output | Hook execution (paired with hook_response via hookResponseMap) |
-| `system.subtype: task_notification` | Summary text with status dot | Background task completed/failed notification (e.g., background shell command finished) |
+| `system.subtype: task_notification` | Summary text with status dot + optional usage stats | Background task completed/failed notification. When `usage` stats are present (agent tasks), shows duration, tool uses, and token count inline. |
 | `user.isCompactSummary: true` | "Session continued" + collapsible summary | User message containing the compacted conversation summary |
 | `type: summary` | "Session summary" + summary text | Auto-generated session summary (created when session index is rebuilt) |
 
@@ -1365,7 +1365,7 @@ Some message types are intentionally **not rendered** in the chat interface as s
 | `type: "stream_event"` | Streaming transport signals (e.g., `message_start`, `content_block_delta`, `message_stop`). Stdout only, requires `--include-partial-messages`. No user-facing content. |
 | `type: "rate_limit_event"` | Rate limit status from Claude API (stdout only, not persisted). Operational metadata — when `status: "allowed"` it's noise, and when rate-limited Claude Code handles it at the CLI level (pausing/retrying). See [data-models.md "Rate Limit Event"](./data-models.md#11-rate-limit-event-stdout-only). |
 | `parent_tool_use_id` set | Subagent messages - rendered inside parent Task tool, not as top-level messages. See [data-models.md "Subagent Message Hierarchy"](./data-models.md#subagent-message-hierarchy--critical). |
-| `system.subtype: task_started` | Redundant with Task tool_use block — the Task tool header already shows the same description. No linking field exists (`task_id` ≠ `tool_use.id`) to merge into the tool block. |
+| `system.subtype: task_started` | Redundant with Task tool_use block — the Task tool header already shows the same description. Note: `tool_use_id` field now links back to the parent tool block, but the message remains redundant regardless. |
 
 **Progress Messages:**
 
