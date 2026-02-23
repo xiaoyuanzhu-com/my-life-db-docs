@@ -6,18 +6,46 @@ title: "Claude Session Messages — Full Review"
 
 ---
 
-## 1. Core Principles
+## 1. Design Goals & Constraints
 
-Before diving into code, it's useful to name the design goals that shaped the system. Every feature below can be traced back to one of these.
+### 1.1 Goals
 
-| Principle | What it means |
-|-----------|--------------|
-| **Real-time first** | Streaming tokens appear as Claude generates them; no polling lag |
-| **Reconnection transparency** | Clients can disconnect and rejoin without losing context |
-| **Memory efficiency** | Keep only what's needed in RAM; evict redundant data promptly |
-| **Deduplication** | Every message has a UUID; duplicates are silently discarded everywhere |
-| **Non-displayable noise separation** | Transport-level messages (stream events, queue ops, rate limits) are kept out of pagination counts |
-| **Cross-device consistency** | Read-state and session state are persisted to the DB; not just in-memory |
+| # | Goal | What it means |
+|---|------|---------------|
+| G1 | **Correct** | No duplicated messages, no missed messages. Every message delivered exactly once. |
+| G2 | **Real-time updates** | Streaming tokens appear as Claude generates them; no polling lag |
+| G3 | **Performant** | Low memory footprint, bounded transfer on connect, no redundant work |
+| G4 | **Smooth UI** | No flashes, no jumps, no blank screens during pagination or reconnection |
+| G5 | **Easy to maintain and debug** | Adding new message types is mechanical; raw messages are inspectable; issues are traceable to Claude or to our code |
+| G6 | **Information-dense, neat UI** | Clean layout first — then expose as much information as possible via scrollable and collapsible containers. No data loss, no clutter. |
+
+### 1.2 Technical Elements & Constraints
+
+Claude Code runs as a subprocess. We get messages from two sources with different characteristics:
+
+| Source | Characteristics |
+|--------|----------------|
+| **stdout** (stdin/stdout mode) | Real-time, includes ephemeral types (`stream_event`, `rate_limit_event`), messages arrive as Claude produces them |
+| **JSONL file** | Durable, written by Claude Code, has write delays, does not include ephemeral types |
+
+The two sources **overlap** — a message may appear in both stdout and the JSONL file. The backend must reconcile them into a single view.
+
+For message type details (types, subtypes, fields, rendering rules), see the [claude-message-handler agent](../../../.claude/agents/claude-message-handler.md).
+
+### 1.3 Design Decisions
+
+These are deliberate choices that shape the architecture. Every component should respect them.
+
+| # | Decision | Rationale |
+|---|----------|-----------|
+| D1 | **Backend maintains a single source of truth** | One merged, deduplicated message list per session — read from JSONL and stdout, properly reconciled. No secondary caches or parallel lists. |
+| D2 | **The message list is append-only** | Messages are never reordered or mutated in the canonical list. New data arrives at the tail. (Stream event eviction is a controlled exception — see §7.) |
+| D3 | **Single source, multiple views** | Each consumer (WebSocket burst, HTTP pagination, session state) generates its view by reading from this one list. No copies. |
+| D4 | **Keep messages as raw as possible** | Store the bytes as received from JSONL / stdout — no re-serialization, no field stripping in the canonical list. This makes it easy to tell whether an issue originates from Claude or from our code. (Large content stripping is applied when *serving*, not when *storing*.) |
+| D5 | **Client builds the same list, paginated** | The client reconstructs the same message list as the backend, but loads it on demand — last page on connect, older pages on scroll. |
+| D6 | **Client decides rendering** | The backend serves raw messages. The frontend decides what to display, what to skip, how to group, and how to style. Rendering logic lives entirely in the frontend. |
+
+> **Covered in later sections:** Stream event eviction (§7) is a deliberate exception to D2 — it removes redundant ephemeral messages after each turn to bound memory. Pagination mechanics (§6) detail how D5 works in practice.
 
 ---
 
@@ -597,3 +625,152 @@ The cloud session messages system is **well-architected** for its requirements. 
 - Last-page-first burst keeping initial connect O(page) not O(session)
 - Large content stripping at JSONL parse time keeping payloads small
 - Cross-device read state via DB MAX() upsert
+
+---
+
+## Appendix A: Historical Issue Analysis
+
+This appendix documents six issues encountered during development and analyzes how the current design addresses each one. The issues are grouped by the discovery session in which they were identified.
+
+---
+
+### A.1 Rate Limit Event Not Rendered
+
+**Issue:** The `rate_limit_event` message type (e.g. a 94% API utilization warning) was silently dropped. Users had no indication they were approaching rate limits.
+
+**Root cause:** `rate_limit_event` was added to `NON_DISPLAYABLE_TYPES` (both backend and frontend), which correctly excluded it from the message list and pagination counts. But there was no separate code path to surface the rate limit information to the user.
+
+**Current status: Resolved.**
+
+`rate_limit_event` remains in `NON_DISPLAYABLE_TYPES` — it should not appear as a chat message. Instead, `handleMessage` in `chat-interface.tsx` intercepts `rate_limit_event` before it reaches `setRawMessages` and extracts the `rate_limit_info` payload:
+
+- If `status === 'allowed_warning'` or `utilization >= 0.75` → sets `rateLimitWarning` state
+- Otherwise → clears the warning
+
+The `RateLimitWarning` component renders a dismissible amber banner showing utilization percentage, rate limit window type, and reset time. The two concerns (exclude from message list vs. show warning banner) are cleanly separated.
+
+**Residual risk:** None. The interception happens before the `NON_DISPLAYABLE_TYPES` filter, so there is no ordering dependency.
+
+---
+
+### A.2 UI Flashes During Pagination and Message Arrival
+
+**Issue:** Visual glitches — the message list would flash or jump when older pages were prepended or when certain messages arrived (particularly on reconnection).
+
+**Root cause:** Two separate flash sources:
+1. **Pagination prepend:** Browser paints the DOM before scroll position is adjusted, causing a single-frame jump
+2. **Reconnection:** Clearing `rawMessages` on reconnect creates an empty-list frame before new messages arrive
+
+**Current status: Resolved.**
+
+**Pagination flash** — `message-list.tsx` uses `useLayoutEffect` (not `useEffect`) to adjust scroll position. `useLayoutEffect` fires synchronously after DOM mutation but before browser paint. The hook computes the scroll height delta from the prepend and adds it to `scrollTop`, keeping visible content in place with no visible jump. The adjustment is gated on `prevScrollTopRef < 300` (user was near top when prepend happened).
+
+**Reconnection flash** — `chat-interface.tsx` uses a deferred clear mechanism (`pendingReconnectClearRef`). Instead of clearing `rawMessages` immediately on reconnect (which would render an empty list for one frame), the clear is deferred to the arrival of the first new message. React 18's automatic batching combines the clear and the new message into a single render, eliminating the empty-list flash.
+
+**Streaming token batching** — `stream_event` deltas are buffered and flushed to state every 40ms (~25 renders/second), preventing per-token re-render churn.
+
+**Residual risk:** The `useLayoutEffect` scroll adjustment relies on `messages.length` as its dependency. If a message update changes content without changing count (e.g. UUID-matched replacement), the effect doesn't fire. This is acceptable because content-only updates don't change scroll height significantly.
+
+---
+
+### A.3 Scroll Preload Slow Due to Non-Displayable Messages
+
+**Issue:** Loading older pages via scroll-up required many round trips because non-displayable messages (stream_events, rate_limit_events, etc.) inflated each page. A page of 100 messages might contain only a handful of displayable messages, requiring many fetches to fill the viewport.
+
+**Root cause:** The HTTP pagination endpoint applied `offset` and `limit` to the raw message list before filtering non-displayable types.
+
+**Current status: Resolved.**
+
+`GetClaudeSessionMessages` in `backend/api/claude.go` now filters non-displayable types **first**, then applies `offset`/`limit` to the already-filtered list:
+
+```
+1. Build allMessages[] by iterating cachedMessages, keeping only displayable types
+2. totalCount = len(allMessages)           // displayable only
+3. messages = allMessages[offset : offset+limit]  // pagination on filtered set
+```
+
+A page of 100 always contains up to 100 displayable messages. The frontend applies a defensive filter on the HTTP response as a safety net, but the backend filtering is authoritative.
+
+**Residual risk:** None for the HTTP endpoint. The initial WebSocket burst uses a different code path (see A.5) where the raw cache is sent — but that path is only for the most recent page and intentionally includes stream_events for mid-stream reconnection.
+
+---
+
+### A.4 Stream Event Eviction Interaction with Pagination
+
+**Issue:** Stream event eviction relies on the next `assistant` message arriving in `BroadcastUIMessage`. Question: does this interact correctly with paginated history loading, or could evicted/un-evicted stream events appear in older pages?
+
+**Root cause:** Conceptual concern about the eviction lifecycle — whether the cache and HTTP endpoint could serve inconsistent views of stream events.
+
+**Current status: Resolved. No interaction issue exists.**
+
+Three layers prevent stream events from appearing in paginated history:
+
+1. **Eviction on completion:** `evictStreamEvents()` runs synchronously (under `cacheMu` lock) when `BroadcastUIMessage` receives a `type: "assistant"` message. All stream events from the preceding turn are removed from `cachedMessages` before any subsequent read.
+
+2. **HTTP endpoint filtering:** `GetClaudeSessionMessages` applies `IsNonDisplayableMessage` to every message before pagination. Even if eviction hasn't run yet (mid-stream), stream events are excluded from HTTP responses.
+
+3. **CLI mode:** Stream events are ephemeral stdout output, never written to the session JSONL file. CLI-mode pagination reads from JSONL, so stream events are structurally absent.
+
+The only context where stream events are intentionally served is the initial WebSocket burst during active streaming (for mid-stream reconnection recovery). In that context, the frontend routes them to the streaming buffer, not `rawMessages`.
+
+**Residual risk:** None for pagination. The eviction + filtering + JSONL-absence triple-guard covers all code paths.
+
+---
+
+### A.5 Blank Screen When Recent Messages Are All Stream Events
+
+**Issue:** During a long streaming turn, the in-memory cache could contain 100+ `stream_event` messages as the most recent entries. The initial WebSocket burst delivers the last page from the raw cache. If `rawMessages` ends up empty (all received messages are stream_events routed to the streaming buffer), the `messages.length === 0` guard could block adaptive fill, leaving the user with a blank screen.
+
+**Root cause:** The initial burst's page boundary (`historyOffset`) is computed from `displayableCount`, but the slice index is applied to the raw `cachedMessages` array. The design assumes non-displayable messages are concentrated at the tail of the cache (current turn's stream events), which is true given per-turn eviction. But if all displayable messages fall before the slice start, the burst contains only stream events.
+
+**Current status: Resolved by design, with a noted fragility.**
+
+The resolution relies on an invariant: **stream events from completed turns are evicted, so only the current turn's stream events exist in the cache, always at the tail.** This means:
+
+- `displayableCount` reflects all displayable messages in the cache (completed turns' messages)
+- `historyOffset` points to a position within the displayable messages
+- Since evicted-turn messages are contiguous before the current turn's stream events, `cachedMessages[historyOffset:]` includes the correct last page of displayable messages **plus** the tail stream events
+
+Example: 150 displayable messages + 200 stream_events (at tail). `historyOffset = 100`. `cachedMessages[100:]` = last 50 displayable messages + 200 stream_events. Frontend gets 50 displayable messages (correct) + streaming content.
+
+The frontend routes `stream_event` to the streaming text buffer (not `rawMessages`), so displayable messages populate the message list while streaming text renders separately.
+
+**Residual risk: The index arithmetic is fragile.** It depends on the invariant that non-displayable messages are strictly at the tail. If other non-displayable types (e.g. `rate_limit_event`, `queue-operation`) are cached via `BroadcastUIMessage` and scattered throughout the cache, the raw-cache index would diverge from the displayable-count-based offset. Currently this is mitigated by:
+- `rate_limit_event` being infrequent
+- `queue-operation` behavior depending on broadcast method (needs verification)
+- `file-history-snapshot` being persisted to JSONL but filtered at the non-displayable level
+
+A more robust approach would compute the burst by filtering the cache first (like the HTTP endpoint does), then slicing. The tradeoff is that the current approach avoids an extra filtering pass on every connect and naturally includes tail stream events for reconnection.
+
+---
+
+### A.6 Session Stuck as "Unread" Forever
+
+**Issue:** When `result` messages live in older pages (before `historyOffset`), the initial WebSocket burst delivers zero results. If `deliveredResults` stays 0, `persistReadState` never writes to the DB. The session never transitions from "unread" to "idle" even while the user is actively viewing it.
+
+**Root cause:** The original implementation only counted `result` messages in the initial burst and live streaming. Opening a session and viewing it was not sufficient to mark historical turns as read.
+
+**Current status: Resolved.**
+
+The connect handler now counts **all** result messages in the full cache, not just those in the burst:
+
+```go
+// On connect (UI mode):
+cachedMessages := session.GetCachedMessages()
+cacheResultCount := 0
+for _, msgBytes := range cachedMessages {
+    if type == "result" { cacheResultCount++ }
+}
+if cacheResultCount > 0 {
+    db.MarkClaudeSessionRead(sessionID, cacheResultCount)
+    deliveredResults.Store(int32(cacheResultCount))
+}
+```
+
+The code comment explains the rationale: *"result messages may live in older cache pages that are NOT included in the initial WebSocket burst. [...] Opening the session in the UI is sufficient to consider the historical turns 'seen'."*
+
+This runs before the initial burst is sent. `MarkClaudeSessionRead` uses a `MAX()` upsert, so concurrent or repeated calls never regress the read count. During the live session, each new `result` message increments `deliveredResults` and persists inline. On disconnect, `defer persistReadState()` acts as a safety net.
+
+Unread state is computed by comparing the session's live `resultCount` (incremented in `BroadcastUIMessage` on each `result`) against the DB's `last_read_message_count`. If the live count exceeds the persisted read count, the session shows as "unread". Since the connect handler writes the full cache's result count to the DB, opening a session immediately resolves any historical unread state.
+
+**Residual risk:** CLI-mode sessions use the same pattern (counting all results in `initialMessages` on connect). The `MAX()` upsert prevents race conditions between multiple clients. No residual risk identified.
