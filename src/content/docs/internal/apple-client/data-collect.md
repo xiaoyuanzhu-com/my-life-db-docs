@@ -279,7 +279,7 @@ Every HealthKit sample — regardless of type — shares the same core shape:
 | `type` | string | HealthKit type identifier (e.g., `HKQuantityTypeIdentifierStepCount`) |
 | `start` | ISO 8601 | Sample start time |
 | `end` | ISO 8601 | Sample end time (same as start for point-in-time readings) |
-| `value` | number/null | Numeric value (null for workouts, category types use integer enums) |
+| `value` | number/string/null | Numeric value for quantity types, human-readable string for category types (e.g. `"asleepDeep"`, `"stood"`), null for workouts |
 | `unit` | string/null | Unit of measurement (e.g., `count`, `count/min`, `kcal`, `m`) |
 | `source` | string | Bundle ID of the source app/device |
 | `device` | string/null | Device name (e.g., "iPhone 15 Pro", "Apple Watch Series 9") |
@@ -310,24 +310,26 @@ Every HealthKit sample — regardless of type — shares the same core shape:
   "unit": "count/min",
   "source": "com.apple.health.9A1B2C",
   "device": "Apple Watch Series 9",
-  "metadata": { "HKHeartRateMotionContext": 2 }
+  "metadata": { "HKMetadataKeyHeartRateMotionContext": "active" }
 }
 ```
-> `HKHeartRateMotionContext`: `0` = notSet, `1` = sedentary, `2` = active (during workout)
+> `HKMetadataKeyHeartRateMotionContext`: `"notSet"`, `"sedentary"`, or `"active"` (during workout)
 
-**Category samples** (sleep, standing, etc.) — `value` is an integer enum:
+**Category samples** (sleep, standing, etc.) — `value` is a human-readable string:
 ```json
 {
   "type": "HKCategoryTypeIdentifierSleepAnalysis",
   "start": "2025-01-15T00:08:00Z",
   "end": "2025-01-15T00:38:00Z",
-  "value": 4,
+  "value": "asleepDeep",
   "unit": null,
   "source": "com.apple.health.9A1B2C",
   "device": "Apple Watch Series 9",
   "metadata": { "HKTimeZone": "Asia/Singapore" }
 }
 ```
+> Sleep analysis values: `"inBed"`, `"asleepUnspecified"`, `"awake"`, `"asleepCore"`, `"asleepDeep"`, `"asleepREM"`
+> Stand hour values: `"idle"`, `"stood"`
 
 **Workout samples** — `value` is null, workout details in `metadata`:
 ```json
@@ -340,7 +342,7 @@ Every HealthKit sample — regardless of type — shares the same core shape:
   "source": "com.apple.health.9A1B2C",
   "device": "Apple Watch Series 9",
   "metadata": {
-    "workoutActivityType": 37,
+    "workoutActivityType": "running",
     "totalDistance": 5200,
     "totalDistanceUnit": "m",
     "totalEnergyBurned": 420,
@@ -348,6 +350,7 @@ Every HealthKit sample — regardless of type — shares the same core shape:
   }
 }
 ```
+> Workout activity types: `"running"`, `"cycling"`, `"swimming"`, `"walking"`, `"functionalStrengthTraining"`, `"yoga"`, `"highIntensityIntervalTraining"`, etc. Unmapped types appear as `"unknown_<rawValue>"`.
 
 ### Storage Layout
 
@@ -407,7 +410,7 @@ Each sync produces a JSON file containing only the new samples since the last sy
   "samples": [
     { "type": "HKQuantityTypeIdentifierStepCount", "start": "...", "end": "...", "value": 250, "unit": "count", ... },
     { "type": "HKQuantityTypeIdentifierHeartRate", "start": "...", "end": "...", "value": 72, "unit": "count/min", ... },
-    { "type": "HKCategoryTypeIdentifierSleepAnalysis", "start": "...", "end": "...", "value": 4, "unit": null, ... },
+    { "type": "HKCategoryTypeIdentifierSleepAnalysis", "start": "...", "end": "...", "value": "asleepDeep", "unit": null, ... },
     ...
   ]
 }
@@ -417,7 +420,7 @@ Samples are sorted by `start` time. All types are mixed together in a single chr
 
 ### Types Reference File
 
-`types.json` is a static decoder ring — maps HealthKit identifiers and enums to human-readable names. It is **not** transformation, just documentation sitting next to the data.
+`types.json` is a static reference file — maps HealthKit identifiers to human-readable names and documents the enum string values used in the data. Since the data itself now uses self-describing strings (e.g. `"asleepDeep"` instead of `4`), this file is **documentation only** — not required to interpret the data.
 
 ```json
 {
@@ -439,43 +442,30 @@ Samples are sorted by `start` time. All types are mixed together in a single chr
     "HKQuantityTypeIdentifierHeartRateRecoveryOneMinute": { "name": "Heart Rate Recovery (1 min)", "unit": "count/min" }
   },
   "metadata_enums": {
-    "HKHeartRateMotionContext": {
+    "HKMetadataKeyHeartRateMotionContext": {
       "name": "Heart Rate Motion Context",
-      "key": "HKMetadataKeyHeartRateMotionContext",
-      "values": { "0": "notSet", "1": "sedentary", "2": "active" }
+      "values": ["notSet", "sedentary", "active"]
     }
   },
   "category_types": {
     "HKCategoryTypeIdentifierSleepAnalysis": {
       "name": "Sleep Analysis",
-      "values": {
-        "0": "inBed",
-        "1": "asleepUnspecified",
-        "2": "awake",
-        "3": "asleepCore",
-        "4": "asleepDeep",
-        "5": "asleepREM"
-      }
+      "values": ["inBed", "asleepUnspecified", "awake", "asleepCore", "asleepDeep", "asleepREM"]
     },
     "HKCategoryTypeIdentifierAppleStandHour": {
       "name": "Stand Hour",
-      "values": { "0": "idle", "1": "stood" }
+      "values": ["idle", "stood"]
     },
     "HKCategoryTypeIdentifierMindfulSession": {
       "name": "Mindful Session",
-      "values": {}
+      "values": []
     }
   },
-  "workout_activity_types": {
-    "37": "running",
-    "13": "cycling",
-    "46": "swimming",
-    "52": "walking",
-    "20": "functionalStrengthTraining",
-    "35": "yoga",
-    "63": "highIntensityIntervalTraining",
-    "3000": "other"
-  }
+  "workout_activity_types": [
+    "running", "cycling", "swimming", "walking",
+    "functionalStrengthTraining", "yoga",
+    "highIntensityIntervalTraining"
+  ]
 }
 ```
 
