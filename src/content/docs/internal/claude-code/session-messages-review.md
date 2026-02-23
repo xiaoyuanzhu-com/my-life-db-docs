@@ -171,7 +171,7 @@ sequenceDiagram
     C->>S: WS Upgrade /subscribe
     S->>RM: LoadRawMessages() if cold
     S->>S: Determine last 2 pages
-    S->>C: session_info { totalPages, currentPage, ... }
+    S->>C: session_info { totalPages }
     S->>C: Burst: last 2 pages (materialized — closed stream_events excluded from sealed pages)
     Note over C,S: Connection established
 
@@ -345,7 +345,7 @@ The seal check runs after each message is appended to the raw list. When a page 
 On WebSocket connect, the backend sends:
 
 ```
-1. session_info { totalPages, currentPage, ... }
+1. session_info { totalPages }
 2. Messages from the last 2 pages (previous sealed page + current open page)
 3. All subsequent live messages as they arrive
 ```
@@ -424,7 +424,7 @@ Scroll-up:
 
 Order is guaranteed because pages partition the raw list sequentially (page 0 < page 1 < ... < page N) and each page's messages are sent in raw-list order. Variable page sizes don't affect ordering.
 
-The client tracks `lowestLoadedPage` (to know which page to fetch next on scroll-up) and `totalPages` (from `session_info`). UUID deduplication handles any overlap from reconnects or page sealing during live streaming.
+The client tracks one piece of pagination state: `lowestLoadedPage`, initialized to `max(0, totalPages - 2)` from `session_info`. Scroll-up fetches `lowestLoadedPage - 1` and decrements. When `lowestLoadedPage === 0`, all history is loaded. UUID deduplication handles any overlap from reconnects or page sealing during live streaming.
 
 **Scroll-up loads are serialized:** Only one page load is in flight at a time (`isLoadingHistory` flag). When page N arrives and the user is still scrolled near the top, the next load (page N-1) is triggered. This guarantees pages arrive in descending order — no out-of-order prepending from concurrent requests racing. The per-page payload is small (~100 messages), so serialization adds negligible delay.
 
@@ -760,7 +760,7 @@ Common scenarios and the expected behavior at each layer. Use these to verify co
 | Layer | Behavior |
 |-------|----------|
 | Backend | Raw list is empty. `LoadRawMessages()` reads JSONL (empty or just `system:init`). |
-| WS burst | `session_info` with `totalPages: 1, currentPage: 0`. Burst sends 0–1 messages (single open page). |
+| WS burst | `session_info` with `totalPages: 1`. Burst sends 0–1 messages (single open page). |
 | Frontend | Shows empty chat or system init. Input ready. |
 | Expected UX | Clean empty state. No spinners, no "loading" for an empty session. |
 
@@ -788,7 +788,7 @@ Common scenarios and the expected behavior at each layer. Use these to verify co
 |-------|----------|
 | Backend | Many sealed pages + current open page. |
 | WS burst | Last 2 pages (~200 messages). `session_info` with `totalPages`. |
-| Frontend | Renders last 2 pages. `currentPage > 1` enables scroll-up loading. |
+| Frontend | Renders last 2 pages. `lowestLoadedPage > 0` enables scroll-up loading. |
 | Expected UX | Fast initial load. User sees recent context. Scroll up fetches older sealed pages via HTTP. |
 
 ### 15.5 Scroll Up — Load Older Pages
