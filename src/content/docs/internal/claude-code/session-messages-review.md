@@ -171,7 +171,7 @@ sequenceDiagram
     C->>S: WS Upgrade /subscribe
     S->>RM: LoadRawMessages() if cold
     S->>S: Determine last 2 pages
-    S->>C: session_info { totalPages }
+    S->>C: session_info { totalPages, lowestBurstPage }
     S->>C: Burst: last 2 pages (materialized — closed stream_events excluded from sealed pages)
     Note over C,S: Connection established
 
@@ -345,10 +345,12 @@ The seal check runs after each message is appended to the raw list. When a page 
 On WebSocket connect, the backend sends:
 
 ```
-1. session_info { totalPages }
+1. session_info { totalPages, lowestBurstPage }
 2. Messages from the last 2 pages (previous sealed page + current open page)
 3. All subsequent live messages as they arrive
 ```
+
+`lowestBurstPage` is the page number of the first page in the burst — the backend computes it (`max(0, totalPages - 2)`). The client uses it directly as its initial `lowestLoadedPage` without needing to know the "2 pages" rule.
 
 **Why 2 pages?** If the current page has only a few messages (new turn just started), a single page would give the client almost no context. The previous sealed page provides ~100 messages of history. Worst case (current page nearly full): ~200 messages — still bounded and fast.
 
