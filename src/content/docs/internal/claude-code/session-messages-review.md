@@ -282,7 +282,7 @@ LoadRawMessages()
   → Append raw bytes to rawMessages
 ```
 
-> **Note on large content stripping:** Read-tool results with large file bodies are currently stripped at JSONL parse time (load time). This is the one known exception to D4/R2 — the raw bytes entering the list are modified before storage. The pragmatic justification: these payloads can be very large (full file contents), and stripping once at load is cheaper than stripping on every serve. The tradeoff: if stripping introduces a bug, the raw list won't help debug it because the original bytes are already gone. If strict D4 compliance becomes important, stripping should move to the materialization layer (serve time). For now, this is acceptable — the stripping logic is simple and well-tested, and WebSocket compression is intentionally disabled since content is already compact.
+> **Note on large content stripping:** Some messages carry very large payloads — read-tool results can embed entire file contents, making a single message tens or hundreds of KB. These are stripped at JSONL parse time (load time) to keep the raw list compact. This is a reviewed, intentional exception to D4/R2: the stripping logic is simple (truncate one known field) and the original content is always available in the JSONL file on disk if needed for debugging. WebSocket compression is intentionally disabled since content is already compact after stripping.
 
 ### 5.4 Live Appending
 
