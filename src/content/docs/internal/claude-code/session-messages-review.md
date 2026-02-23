@@ -628,13 +628,124 @@ The cloud session messages system is **well-architected** for its requirements. 
 
 ---
 
-## Appendix A: Historical Issue Analysis
+## 15. Scenarios
 
-This appendix documents six issues encountered during development and analyzes how the current design addresses each one. The issues are grouped by the discovery session in which they were identified.
+Common scenarios and the expected behavior at each layer. Use these to verify correctness and as regression criteria.
+
+### 15.1 Fresh Session — First Connect
+
+| Layer | Behavior |
+|-------|----------|
+| Backend | Cache is empty. `LoadMessageCache()` reads JSONL (empty or just `system:init`). |
+| WS burst | `session_info` with `totalMessages: 0` (or 1). Burst sends 0–1 messages. |
+| Frontend | Shows empty chat or system init. Input ready. |
+| Expected UX | Clean empty state. No spinners, no "loading" for an empty session. |
+
+### 15.2 Reconnect — Session Idle (Claude Not Streaming)
+
+| Layer | Behavior |
+|-------|----------|
+| Backend | Cache has completed turns. Stream events already evicted. |
+| WS burst | Last page of displayable messages (up to 100). `session_info` with accurate `totalMessages`. |
+| Frontend | Dedup by UUID — messages already in `rawMessages` are skipped. New ones appended. No clear-and-refill. |
+| Expected UX | Seamless. User sees the same messages. No flash, no scroll jump. |
+
+### 15.3 Reconnect — Mid-Stream (Claude Actively Generating)
+
+| Layer | Behavior |
+|-------|----------|
+| Backend | Cache has completed turns + current turn's stream events at tail. |
+| WS burst | Last page of displayable messages + tail stream events (raw cache from `historyOffset`). |
+| Frontend | Displayable messages → `rawMessages`. Stream events → streaming buffer. Streaming text resumes rendering. |
+| Expected UX | User sees message history + partial streaming text. Streaming continues from where it was. No lost tokens. |
+
+### 15.4 Long Session — Initial Connect (Hundreds of Messages)
+
+| Layer | Behavior |
+|-------|----------|
+| Backend | `displayableCount` used to compute `historyOffset`. Only last page served on connect. |
+| WS burst | Up to 100 displayable messages + `session_info` with full `totalMessages`. |
+| Frontend | Renders last page. `historyOffset > 0` enables scroll-up loading. |
+| Expected UX | Fast initial load. User sees recent context. Scroll up reveals "load more" or auto-fetches older pages. |
+
+### 15.5 Scroll Up — Load Older Pages
+
+| Layer | Behavior |
+|-------|----------|
+| HTTP | `GET /messages?offset=N&limit=100`. Backend filters non-displayable first, then slices. Page always has up to 100 displayable messages. |
+| Frontend | Dedup by UUID, prepend to `rawMessages`. `useLayoutEffect` adjusts scroll position by height delta. `historyOffset` decremented. |
+| Expected UX | Older messages appear above. No scroll jump. When `historyOffset === 0`, all history loaded. |
+
+### 15.6 Long Streaming Turn (Many Stream Events in Cache)
+
+| Layer | Behavior |
+|-------|----------|
+| Backend | Stream events accumulate at cache tail. Previous turns' events already evicted. |
+| WS burst (if reconnect) | `historyOffset` based on displayable count — points into the displayable region. Slice includes displayable messages + tail stream events. |
+| Frontend | Stream events routed to buffer (40ms flush). Displayable messages populate `rawMessages`. |
+| Expected UX | Message list shows completed turns. Streaming text renders smoothly. No blank screen — displayable messages are always present before the stream event tail. |
+
+### 15.7 Turn Completes — Stream Event Eviction
+
+| Layer | Behavior |
+|-------|----------|
+| Backend | `assistant` message arrives → `BroadcastUIMessage` caches it → `evictStreamEvents()` removes all stream events from cache (under lock). |
+| WS live | `assistant` frame sent to all connected clients. |
+| Frontend | Receives `assistant` message. Clears streaming buffer. Renders final message in `rawMessages`. |
+| Expected UX | Streaming text replaced by final formatted message. No flicker — React 18 batches the clear + render. |
+
+### 15.8 Rate Limit Warning
+
+| Layer | Behavior |
+|-------|----------|
+| Backend | `rate_limit_event` broadcast to clients (cached via `BroadcastUIMessage`). |
+| Frontend | `handleMessage` intercepts before `rawMessages`. If `utilization >= 0.75` or `status === 'allowed_warning'` → `setRateLimitWarning`. |
+| Expected UX | Amber banner appears above input. Shows utilization %, window type, reset time. Dismissible. Does **not** appear as a chat message. |
+
+### 15.9 Permission Request (Tool Use Approval)
+
+| Layer | Behavior |
+|-------|----------|
+| Backend | `control_request` cached via `BroadcastUIMessage` (survives reconnect). |
+| Frontend | `handleMessage` routes to `permissions.handleControlRequest`. Renders permission UI inline. |
+| User action | Approve/deny → `control_response` sent via WS. Backend forwards to Claude stdin. |
+| Expected UX | Permission prompt appears inline in the message flow. Persists across reconnects until resolved. |
+
+### 15.10 New Message Type from Claude Code Update
+
+| Layer | Behavior |
+|-------|----------|
+| Backend | Unknown type passes through — raw bytes cached, broadcast, served. No parsing failure. |
+| Frontend | Falls through to `UnknownMessageBlock` — renders raw JSON in a collapsible block. |
+| Expected UX | User sees the message (not silently dropped). Raw JSON aids debugging. Developer adds proper rendering later per G6. |
+
+### 15.11 Multiple Clients on Same Session
+
+| Layer | Behavior |
+|-------|----------|
+| Backend | Each WS client registered as subscriber. `BroadcastUIMessage` fans out to all. Same cache serves all HTTP pagination requests. |
+| Read state | `MarkClaudeSessionRead` uses `MAX()` upsert — highest read count wins. No regression across devices. |
+| Expected UX | All clients see the same messages. Opening on any device marks session as read. No stale "unread" badges. |
+
+### 15.12 Session State Transitions
+
+| Trigger | State | How it resolves |
+|---------|-------|-----------------|
+| Claude starts processing | `working` | `isProcessing` flag set on session |
+| `result` message arrives, no client viewing | `unread` | `resultCount` exceeds `lastReadResultCount` in DB |
+| Client connects to session | `idle` | Connect handler writes full `resultCount` to DB via `MarkClaudeSessionRead` |
+| `control_request` arrives | `unread` | `pendingPermissionCount > 0` |
+| User responds to permission | `working` or `idle` | Permission resolved, count decremented |
 
 ---
 
-### A.1 Rate Limit Event Not Rendered
+## 16. Historical Issues
+
+Six issues encountered during development and how the current design addresses each one.
+
+---
+
+### 16.1 Rate Limit Event Not Rendered
 
 **Issue:** The `rate_limit_event` message type (e.g. a 94% API utilization warning) was silently dropped. Users had no indication they were approaching rate limits.
 
@@ -653,7 +764,7 @@ The `RateLimitWarning` component renders a dismissible amber banner showing util
 
 ---
 
-### A.2 UI Flashes During Pagination and Message Arrival
+### 16.2 UI Flashes During Pagination and Message Arrival
 
 **Issue:** Visual glitches — the message list would flash or jump when older pages were prepended or when certain messages arrived (particularly on reconnection).
 
@@ -673,7 +784,7 @@ The `RateLimitWarning` component renders a dismissible amber banner showing util
 
 ---
 
-### A.3 Scroll Preload Slow Due to Non-Displayable Messages
+### 16.3 Scroll Preload Slow Due to Non-Displayable Messages
 
 **Issue:** Loading older pages via scroll-up required many round trips because non-displayable messages (stream_events, rate_limit_events, etc.) inflated each page. A page of 100 messages might contain only a handful of displayable messages, requiring many fetches to fill the viewport.
 
@@ -691,11 +802,11 @@ The `RateLimitWarning` component renders a dismissible amber banner showing util
 
 A page of 100 always contains up to 100 displayable messages. The frontend applies a defensive filter on the HTTP response as a safety net, but the backend filtering is authoritative.
 
-**Residual risk:** None for the HTTP endpoint. The initial WebSocket burst uses a different code path (see A.5) where the raw cache is sent — but that path is only for the most recent page and intentionally includes stream_events for mid-stream reconnection.
+**Residual risk:** None for the HTTP endpoint. The initial WebSocket burst uses a different code path (see §16.5) where the raw cache is sent — but that path is only for the most recent page and intentionally includes stream_events for mid-stream reconnection.
 
 ---
 
-### A.4 Stream Event Eviction Interaction with Pagination
+### 16.4 Stream Event Eviction Interaction with Pagination
 
 **Issue:** Stream event eviction relies on the next `assistant` message arriving in `BroadcastUIMessage`. Question: does this interact correctly with paginated history loading, or could evicted/un-evicted stream events appear in older pages?
 
@@ -717,7 +828,7 @@ The only context where stream events are intentionally served is the initial Web
 
 ---
 
-### A.5 Blank Screen When Recent Messages Are All Stream Events
+### 16.5 Blank Screen When Recent Messages Are All Stream Events
 
 **Issue:** During a long streaming turn, the in-memory cache could contain 100+ `stream_event` messages as the most recent entries. The initial WebSocket burst delivers the last page from the raw cache. If `rawMessages` ends up empty (all received messages are stream_events routed to the streaming buffer), the `messages.length === 0` guard could block adaptive fill, leaving the user with a blank screen.
 
@@ -744,7 +855,7 @@ A more robust approach would compute the burst by filtering the cache first (lik
 
 ---
 
-### A.6 Session Stuck as "Unread" Forever
+### 16.6 Session Stuck as "Unread" Forever
 
 **Issue:** When `result` messages live in older pages (before `historyOffset`), the initial WebSocket burst delivers zero results. If `deliveredResults` stays 0, `persistReadState` never writes to the DB. The session never transitions from "unread" to "idle" even while the user is actively viewing it.
 
