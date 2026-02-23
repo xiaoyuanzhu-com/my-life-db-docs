@@ -2,7 +2,7 @@
 title: "Claude Session Messages — Full Review"
 ---
 
-> **Scope**: Backend → Frontend review of the entire session messages pipeline, covering the raw message list, page-based pagination, WebSocket delivery, stream event lifecycle, and rendering. Written 2026-02-23 against the current codebase; updated 2026-02-24 with the page-based pagination design and append-only raw message model. Where the existing [`websocket-protocol.md`](./websocket-protocol) describes an older polling-based design, this document reflects the target implementation.
+> **Scope**: Backend → Frontend review of the entire session messages pipeline, covering the raw message list, page-based pagination, WebSocket delivery, stream event lifecycle, and rendering. Written 2026-02-23 against the current codebase; updated 2026-02-24 with the page-based pagination design, append-only raw message model, dropped-at-ingest types, and CLI mode removal. Where the existing [`websocket-protocol.md`](./websocket-protocol) describes an older polling-based design, this document reflects the target implementation.
 
 ---
 
@@ -25,7 +25,7 @@ Claude Code runs as a subprocess. We get messages from two sources with differen
 
 | Source | Characteristics |
 |--------|----------------|
-| **stdout** (stdin/stdout mode) | Real-time, includes ephemeral types (`stream_event`, `rate_limit_event`), messages arrive as Claude produces them |
+| **stdout** | Real-time, includes ephemeral types (`stream_event`, `rate_limit_event`), messages arrive as Claude produces them |
 | **JSONL file** | Durable, written by Claude Code, has write delays, does not include ephemeral types |
 
 The two sources **overlap** — a message may appear in both stdout and the JSONL file. The backend must reconcile them into a single view.
@@ -61,16 +61,14 @@ graph TD
 
     subgraph Backend["Backend (Go)"]
         SUBSCRIBE["/subscribe WebSocket\nClaudeSubscribeWebSocket()"]
-        TERMINAL["/ws WebSocket\n(PTY binary — CLI mode only)"]
         HTTP_MSG["GET /messages\n(HTTP pagination)"]
         SESSION["session.go\n(rawMessages, broadcast)"]
         READER["session_reader.go\n(JSONL parse)"]
-        WATCHER["session_watcher.go\n(CLI mode file watch)"]
         DB["DB\n(read state, archive)"]
     end
 
     subgraph Upstream["Claude Process"]
-        CLAUDE_PROC["claude CLI\n(stdin/stdout/stderr)"]
+        CLAUDE_PROC["claude CLI\n(stdin/stdout)"]
         JSONL["Session JSONL file"]
     end
 
@@ -79,23 +77,13 @@ graph TD
     SUBSCRIBE --> SESSION
     HTTP_MSG --> SESSION
     SESSION --> READER
-    SESSION --> WATCHER
-    CLAUDE_PROC -->|UI mode stdout| SESSION
-    CLAUDE_PROC -->|CLI mode PTY| TERMINAL
+    CLAUDE_PROC -->|stdout| SESSION
     CLAUDE_PROC --> JSONL
     READER --> JSONL
-    WATCHER --> JSONL
     SESSION --> DB
 ```
 
-Two WebSocket endpoints serve different purposes:
-
-| Endpoint | Mode | Format | Compression | Purpose |
-|----------|------|--------|-------------|---------|
-| `/api/claude/sessions/:id/subscribe` | UI | JSON text frames | **Disabled** (intentional) | Structured chat, permissions, streaming |
-| `/api/claude/sessions/:id/ws` | CLI | Binary | Enabled | Raw PTY I/O for xterm.js |
-
-This document focuses entirely on the **subscribe** endpoint. The terminal endpoint is pass-through PTY data.
+WebSocket endpoint: `/api/claude/sessions/:id/subscribe` — JSON text frames, compression disabled (content already compact after stripping). Handles structured chat, permissions, and streaming.
 
 ---
 
@@ -144,31 +132,28 @@ interface SessionMessageEnvelope {
 > **Why is `set_permission_mode` not stored?**
 > If it were stored in the raw list, every new client that connects would re-receive and re-apply old mode switches. Broadcasting without storing means only currently-connected clients see it.
 
-### 3.2 Non-Displayable Set
+### 3.2 Dropped & Special Types
 
-The frontend defines a set of types that are never rendered in the message list:
+Not all stdout message types enter the raw message list. Some are dropped at ingest; others need special handling at the view layer.
 
-```typescript
-// frontend — NON_DISPLAYABLE_TYPES
-const NON_DISPLAYABLE_TYPES = new Set([
-  'stream_event',
-  'rate_limit_event',
-  'queue-operation',
-  'file-history-snapshot',
-])
-```
+**Dropped at ingest (never enter raw list):**
 
-**Important distinction:** "Non-displayable" is a **frontend rendering concept** (D6), not a backend pagination concept. The backend treats these differently:
+| Type | Why dropped |
+|------|-------------|
+| `queue-operation` | Internal session queue management. Not used by any consumer. Dropped to keep the raw list compact. |
+| `file-history-snapshot` | Internal file versioning. Not used by any consumer. Dropped to keep the raw list compact. |
 
-| Type | In raw list? | In page seal count? | In materialized page? | Frontend renders? |
+This is a reviewed, intentional choice — like large content stripping (§5.3). The goal is to keep the raw list lean: only messages that at least one consumer needs. See §5.4 for the full ingest routing table.
+
+**Special types (in raw list, not rendered as chat messages):**
+
+| Type | In raw list? | In page seal count? | In materialized page? | Frontend behavior |
 |------|-------------|--------------------|-----------------------|-------------------|
-| `stream_event` (closed) | Yes (R1) | No — excluded by eviction (§7) | No | No |
+| `stream_event` (closed) | Yes (R1) | No — excluded by eviction (§7) | No | — |
 | `stream_event` (open) | Yes (R1) | No — excluded by eviction | Yes — needed for mid-stream reconnect | Routed to streaming buffer |
-| `rate_limit_event` | Yes (R1) | **Yes** — counts toward 100 | Yes | No (intercepted for warning banner) |
-| `queue-operation` | Yes (R1) | **Yes** — counts toward 100 | Yes | No |
-| `file-history-snapshot` | Yes (R1) | **Yes** — counts toward 100 | Yes | No |
+| `rate_limit_event` | Yes (R1) | **Yes** — counts toward 100 | Yes | Intercepted for warning banner; not rendered as chat message |
 
-Only closed `stream_event` messages are excluded from the page seal count and from materialized pages. The other non-displayable types are infrequent and count toward the 100-message seal threshold. The frontend decides not to render them (D6).
+Only closed `stream_event` messages are excluded from the page seal count and from materialized pages. `rate_limit_event` is a regular message in the backend — it counts toward the seal threshold and is served to clients. The frontend intercepts it for the rate-limit warning banner (D6).
 
 ---
 
@@ -229,18 +214,20 @@ Key behaviors of the connection hook:
 | **Session isolation** | Stale messages for previous session IDs are discarded |
 | **snake_case → camelCase** | Message normalization at the WebSocket entry point |
 
-> **Known gap (H1 in robustness plan):** No heartbeat/ping-pong. Environments with aggressive idle timeouts (AWS ALB 60s, nginx 60s, Cloudflare 100s) may silently drop the connection. The backend sends server-side pings every 30s, but the frontend doesn't send application-level pings. Adding `{ type: "ping" }` every 30s from the client would cover all proxy tiers.
+> **Known gap (H1):** No frontend application-level heartbeat — see §11.1.
+>
+> **Known gap (H2):** No `visibilitychange` handler — see §11.2.
 
-> **Known gap (H2):** No `visibilitychange` handler. When the tab is backgrounded, mobile browsers kill the connection. The terminal component handles this correctly; the chat WebSocket does not.
+### 4.4 Message Sources
 
-### 4.4 Session Modes
+The backend receives messages from two sources:
 
-| Mode | Description | Stdout handling |
-|------|-------------|----------------|
-| `ui` | JSON streaming | Messages parsed from stdout JSON, pushed to subscribers |
-| `cli` | PTY/xterm | PTY binary piped through `/ws`; JSONL file polled separately |
+| Source | When | How |
+|--------|------|-----|
+| **stdout** | Live, as Claude produces them | Backend reads stdout JSON, pushes to raw list + subscribers |
+| **JSONL file** | On cold start / session activation | `LoadRawMessages()` reads JSONL line by line (§5.3) |
 
-CLI mode uses `SessionWatcher` (fsnotify + polling fallback at 5s) to detect new JSONL entries, then calls `BroadcastUIMessage()`. In UI mode, the backend reads stdout directly.
+The two sources overlap — a message may appear in both stdout and the JSONL file. UUID deduplication (§5.5) reconciles them into a single list.
 
 ---
 
@@ -298,6 +285,8 @@ BroadcastToClients(data)      → fan-out only (NOT stored)
 | `user`, `assistant`, `result`, `progress`, `system` | BroadcastUIMessage | Durable history — new clients need these |
 | `control_request`, `control_response` | BroadcastUIMessage | State-critical — reconnecting clients need pending permissions |
 | `stream_event` | BroadcastUIMessage | Needed for mid-stream reconnection recovery |
+| `rate_limit_event` | BroadcastUIMessage | Frontend intercepts for warning banner |
+| `queue-operation`, `file-history-snapshot` | **Dropped** (not broadcast) | Not used by any consumer — see §3.2 |
 | `set_permission_mode` response | BroadcastToClients | Transient — should NOT be replayed on reconnect |
 
 ### 5.5 Deduplication
@@ -312,7 +301,7 @@ seenUUIDs[uuid] = true
 rawMessages = append(rawMessages, data)
 ```
 
-This handles the JSONL-vs-stdout overlap: in CLI mode, the watcher may pick up a message that was already added via stdout. UUID tracking ensures exactly-once delivery (G1).
+This handles the JSONL-vs-stdout overlap: on cold start, JSONL may contain messages already seen via stdout from a previous session activation. UUID tracking ensures exactly-once delivery (G1).
 
 ---
 
@@ -333,7 +322,6 @@ pageBreaks:   [103, 210]
 | Property | Sealed pages | Current (last) page |
 |----------|-------------|---------------------|
 | Content changes? | Never — immutable once sealed | Grows as new messages append |
-| HTTP cacheable? | Yes — aggressive cache headers | No — must be fetched live |
 | Contains stream_events? | No — evicted before sealing | May contain active stream_events |
 
 ### 6.2 Page Sealing Rules
@@ -377,7 +365,7 @@ Live:
 
 ### 6.4 Scroll-Up: HTTP for Older Pages
 
-Older pages are fetched on demand when the user scrolls up. Since sealed pages are immutable, these are simple HTTP GETs that can be cached aggressively.
+Older pages are fetched on demand when the user scrolls up. Since sealed pages are immutable, these are simple HTTP GETs with stable content.
 
 ```
 GET /api/claude/sessions/:id/messages?page=3
@@ -398,7 +386,7 @@ When `page === 0` and the user scrolls up, all history is loaded.
 
 ### 6.5 Implementation Notes
 
-**Page break storage:** The backend maintains a `pageBreaks []int` — a list of raw-list indices where each sealed page ends. These are computed incrementally as messages append. On server restart, page breaks are re-derived from the JSONL-loaded raw list by replaying the sealing rules. Since JSONL contains no `stream_event` messages (they're ephemeral stdout), the re-derivation is purely count-based and deterministic.
+**Page break storage:** The backend maintains a `pageBreaks []int` — a list of raw-list indices where each sealed page ends. These are computed incrementally as messages append. On server restart, page breaks are re-derived by running the same sealing algorithm on the loaded raw message list. Since JSONL does not contain `stream_event` messages (they're ephemeral), `hasOpenStream` is always false during re-derivation — the algorithm reduces to counting and sealing every 100 messages.
 
 **O(1) seal check:** The seal check runs after every append. To avoid scanning the current page on each check, maintain incrementally:
 
@@ -416,14 +404,36 @@ On each append:
 
 **Sealed page serving:** Materialized page content (raw messages minus closed stream_events) can be computed once at seal time and stored alongside the break index. This avoids re-filtering on every HTTP request for sealed pages.
 
-### 6.6 Performance Characteristics
+### 6.6 Client-Side Reconstruction
+
+Pages are a backend delivery mechanism — the client never sees page boundaries. It maintains a single flat `rawMessages` array in the same order as the backend's raw list:
+
+```
+On connect:
+  rawMessages = [...burst_messages]
+  (backend sends last 2 pages in raw-list order, no page delimiter)
+
+Live:
+  rawMessages = [...existing, newMsg]
+  (appended in real-time, same order as backend append)
+
+Scroll-up:
+  rawMessages = [...older_page_messages, ...existing]
+  (prepend HTTP response before current list)
+```
+
+Order is guaranteed because pages partition the raw list sequentially (page 0 < page 1 < ... < page N) and each page's messages are sent in raw-list order. Variable page sizes don't affect ordering.
+
+The client tracks `lowestLoadedPage` (to know which page to fetch next on scroll-up) and `totalPages` (from `session_info`). UUID deduplication handles any overlap from reconnects or page sealing during live streaming.
+
+### 6.7 Performance Characteristics
 
 | Scenario | Messages transferred on connect |
 |----------|--------------------------------|
 | Short session (< 100 msgs) | All messages (1 page, not yet sealed) |
 | Long session (1000 msgs) | Last ~200 (2 pages) |
 | Reconnect mid-stream | Last ~200 (includes stream_events in open page) |
-| Scroll-up (per request) | ~100 (1 sealed page, HTTP cacheable) |
+| Scroll-up (per request) | ~100 (1 sealed page) |
 
 ---
 
@@ -523,6 +533,16 @@ else → "idle"
 
 State is broadcast via SSE (not WebSocket) to drive the session list UI and Apple client badge counts. Read state (`readResultCount`) is persisted to SQLite via `MAX()` upsert — ensuring state never regresses across device switches.
 
+### 8.1 Read Tracking with Pagination
+
+With page-based pagination (§6), the client receives only the last 2 pages on connect — not the full history. Read tracking must still work correctly.
+
+**On connect:** The connect handler counts **all** `result` messages in the full raw message list and writes this count to DB as `lastReadResultCount`. Opening a session is sufficient to consider all existing turns "seen" — the user has access to the latest results via the last 2 pages, and can scroll up for older ones on demand.
+
+**During live session:** Each new `result` message increments a `deliveredResults` counter. On disconnect, this count is persisted to DB as a safety net.
+
+**Implication:** `unreadResultCount > 0` only triggers when new results arrive **after** the user's last connect. Results in older pages — even if the user never scrolled up to load them — are marked as read when the session is opened. There is no stale "unread" state from historical results.
+
 ---
 
 ## 9. Performance Optimizations Summary
@@ -538,7 +558,6 @@ State is broadcast via SSE (not WebSocket) to drive the session list UI and Appl
 | **UUID dedup (raw list)** | `session.go` | Prevents double-entry from JSONL+stdout overlap (G1) |
 | **UUID dedup (frontend)** | `chat-interface.tsx` | Prevents duplicate display on reconnect |
 | **Last-2-pages burst** | WS connect handler | O(2 pages) instead of O(session) on every connect |
-| **Sealed page HTTP caching** | HTTP endpoint | Sealed pages are immutable — serve with aggressive `Cache-Control` headers; browser caches eliminate repeat fetches on scroll-up |
 | **O(1) page seal check** | `session.go` | Incremental counters (`currentPageCount`, `hasOpenStream`) avoid scanning current page on every append |
 | **Read-state MAX() upsert** | `db/claude_sessions.go` | Cross-device consistency without locks |
 
@@ -590,17 +609,17 @@ sequenceDiagram
 
 These are issues identified during this review. The existing [`claude-chat-robustness-plan.md`](../design/claude-chat-robustness-plan) covers frontend-specific bugs in more detail.
 
-### 11.1 No Frontend Heartbeat (High Priority)
+### 11.1 No Frontend Heartbeat (Low Priority)
 
-Many reverse proxies (nginx, ALB, Cloudflare) have idle timeouts of 60–100s. The backend sends server-side WS pings every 30s, but the frontend doesn't send application-level pings. The connection can silently drop in certain proxy configurations.
+The backend sends native WebSocket pings every 30s via gorilla/websocket. This covers most deployments. Some reverse proxies (nginx, ALB, Cloudflare) track idle by data frames only and may ignore WebSocket control frames — in those configurations, the connection could silently drop.
 
-**Fix:** Add `{ type: "ping" }` send every 30s from the frontend. The backend already handles unknown message types gracefully (logs and continues).
+**Fix if needed:** Add `{ type: "ping" }` send every 30s from the frontend. The backend already handles unknown message types gracefully. Only worth adding if specific proxy issues are observed.
 
-### 11.2 No Visibility Change Handling (High Priority)
+### 11.2 Visibility Change Handling
 
-The terminal component (`terminal.tsx`) correctly reconnects when the tab becomes visible again. The chat WebSocket hook does not. Mobile browsers aggressively kill background connections.
+When a mobile browser backgrounds a tab, it may silently kill the WebSocket. When the user returns, the chat is frozen until the next backoff timer fires (could be seconds).
 
-**Fix:** Add `document.addEventListener('visibilitychange', ...)` to `use-session-websocket.ts`, mirroring the terminal implementation.
+**Fix:** Add `document.addEventListener('visibilitychange', ...)` to `use-session-websocket.ts`. On `visibilitychange` to `visible`, check connection health and reconnect immediately if needed.
 
 ### 11.3 Raw List Memory Growth
 
@@ -614,17 +633,19 @@ The `rawMessages` slice is append-only (R1) and grows throughout a session's lif
 
 **Consideration:** Persist to DB alongside session metadata. Low risk currently since server restarts are rare.
 
-### 11.5 CLI Mode Watcher Delay
+### 11.5 Page Break Re-derivation Cost on Restart
 
-The `SessionWatcher` falls back to 5s polling if fsnotify fails. CLI-mode users could see up to 5s message delay in that case. This is filesystem-dependent and typically doesn't occur, but logging when the fallback activates would help diagnose it.
+Page break indices are held in memory. On server restart, the raw list is reloaded from JSONL and page breaks are re-derived by running the same sealing algorithm (§6.5). The algorithm operates on the raw message list regardless of source — JSONL vs stdout makes no difference. For a session with 10,000 messages this is a single O(N) scan — fast enough at startup. If this becomes a bottleneck for very large sessions, page breaks could be persisted to a metadata file alongside the JSONL.
 
-### 11.6 Page Break Re-derivation Cost on Restart
-
-Page break indices are held in memory. On server restart, the raw list is reloaded from JSONL and page breaks must be re-derived by replaying the sealing rules. Since JSONL contains no `stream_event` messages (they're ephemeral), re-derivation is purely count-based (seal every 100 messages). For a session with 10,000 messages this is a single O(N) scan — fast enough at startup. If this becomes a bottleneck for very large sessions, page breaks could be persisted to a metadata file alongside the JSONL.
-
-### 11.7 websocket-protocol.md Is Outdated
+### 11.6 websocket-protocol.md Is Outdated
 
 The existing `websocket-protocol.md` describes an old polling-based architecture (500ms polls, `ReadSessionHistory`). The current implementation uses push broadcasting (`BroadcastUIMessage`), an append-only raw message list, page-based materialization, and paginated HTTP for older pages. That document should be updated or superseded by this review.
+
+### 11.7 TODO: control_request / control_response JSONL Loading
+
+`LoadMessageCache()` currently skips `control_request` and `control_response` when loading from JSONL. This prevents phantom permission dialogs for already-completed tool calls — `control_response` is only broadcast live, never stored in JSONL, so loading stale `control_request` messages would show unresolvable prompts.
+
+**Open question:** Can these be properly deduplicated by UUID (like other messages), allowing them to load from JSONL without phantom dialogs? This would require matching each `control_request` with its `control_response` to determine if the request was already resolved. Unresolved requests that survived a restart could then be surfaced correctly instead of silently dropped.
 
 ---
 
@@ -651,13 +672,12 @@ The 40ms flush interval for stream events is a good balance:
 
 ## 13. Cross-Client Consistency
 
-The backend serves three client types from the same raw message list:
+The backend serves two client types from the same raw message list:
 
 | Client | Connection | Notes |
 |--------|-----------|-------|
 | Web (React) | `/subscribe` WebSocket | Primary client |
 | iOS / macOS (SwiftUI) | SSE only (notifications) | Session list + state; no message streaming |
-| Web terminal (xterm.js) | `/ws` WebSocket | CLI mode only |
 
 The Apple client does **not** stream messages via WebSocket — it receives session state changes via SSE and opens a WebView that loads the React frontend for actual message display. This means message rendering is consistent across platforms (same React code), and only the session list / badge counts are native.
 
@@ -665,21 +685,22 @@ The Apple client does **not** stream messages via WebSocket — it receives sess
 
 ## 14. Review Summary
 
-The cloud session messages system is **well-architected** for its requirements. The two-tier WebSocket design cleanly separates binary PTY traffic from structured chat messages. The append-only raw message list (§5) gives a single source of truth that all views derive from. Page-based pagination (§6) with stable, immutable sealed pages keeps delivery bounded and HTTP-cacheable. Stream event eviction at the materialized layer (§7) keeps what you need for reconnection recovery while excluding redundant data from served pages — without mutating the raw list.
+The session messages system is **well-architected** for its requirements. The append-only raw message list (§5) gives a single source of truth that all views derive from. Page-based pagination (§6) with stable, immutable sealed pages keeps delivery bounded. Stream event eviction at the materialized layer (§7) keeps what you need for reconnection recovery while excluding redundant data from served pages — without mutating the raw list.
 
-**Highest-value improvements (in order):**
+**Remaining improvements (in order):**
 
-1. **Frontend heartbeat** — prevents silent connection drops behind proxies (30 min of work)
-2. **Visibility change reconnect** — makes mobile experience reliable (1 hour of work)
-3. **Update websocket-protocol.md** — remove confusion about the old polling design (documentation, no code change)
-4. **Permission mode persistence** — survive server restarts (medium effort, low urgency)
-5. **Message list virtualization** — future-proofing for very long sessions (large effort, low urgency now)
+1. **Update websocket-protocol.md** — remove confusion about the old polling design (documentation, no code change)
+2. **control_request JSONL loading** — investigate proper dedup to avoid phantom dialogs (§11.8)
+3. **Permission mode persistence** — survive server restarts (medium effort, low urgency)
+4. **Frontend heartbeat** — only if proxy-specific issues are observed (§11.1)
+5. **Visibility change reconnect** — improves mobile tab-switch UX (§11.2)
+6. **Message list virtualization** — future-proofing for very long sessions (large effort, low urgency now)
 
 **Things that are working well:**
 - Append-only raw message list as single source of truth (R1, D1)
 - UUID-based deduplication at every layer (raw list, page serving, frontend)
 - Stream event lifecycle (kept in raw list for reconnection → excluded from sealed pages at materialization)
-- Page-based pagination with immutable sealed pages (HTTP cacheable, stable boundaries)
+- Page-based pagination with immutable sealed pages (stable boundaries)
 - Last-2-pages burst keeping initial connect O(2 pages) not O(session)
 - Large content stripping at JSONL parse time keeping payloads small
 - Cross-device read state via DB MAX() upsert
@@ -730,9 +751,9 @@ Common scenarios and the expected behavior at each layer. Use these to verify co
 
 | Layer | Behavior |
 |-------|----------|
-| HTTP | `GET /messages?page=N`. Sealed page served with aggressive cache headers. ~100 messages per page (closed stream_events excluded). |
+| HTTP | `GET /messages?page=N`. ~100 messages per page (closed stream_events excluded). |
 | Frontend | Dedup by UUID, prepend to `rawMessages`. `useLayoutEffect` adjusts scroll position by height delta. |
-| Expected UX | Older messages appear above. No scroll jump. When `page === 0`, all history loaded. Sealed pages cached by browser — instant on revisit. |
+| Expected UX | Older messages appear above. No scroll jump. When `page === 0`, all history loaded. |
 
 ### 15.6 Long Streaming Turn (Many Stream Events in Raw List)
 
@@ -924,4 +945,4 @@ This runs before the initial burst is sent. `MarkClaudeSessionRead` uses a `MAX(
 
 Unread state is computed by comparing the session's live `resultCount` (incremented in `BroadcastUIMessage` on each `result`) against the DB's `last_read_message_count`. If the live count exceeds the persisted read count, the session shows as "unread". Since the connect handler writes the full raw list's result count to the DB, opening a session immediately resolves any historical unread state.
 
-**Residual risk:** CLI-mode sessions use the same pattern (counting all results in `initialMessages` on connect). The `MAX()` upsert prevents race conditions between multiple clients. No residual risk identified.
+**Residual risk:** The `MAX()` upsert prevents race conditions between multiple clients. No residual risk identified.
