@@ -2,7 +2,7 @@
 title: "Claude Session Messages — Full Review"
 ---
 
-> **Scope**: Backend → Frontend review of the entire session messages pipeline, covering the WebSocket system, message caching, pagination, stream event lifecycle, and performance characteristics. Written 2026-02-23 against the current codebase. Where the existing [`websocket-protocol.md`](./websocket-protocol) describes an older polling-based design, this document reflects the actual implementation.
+> **Scope**: Backend → Frontend review of the entire session messages pipeline, covering the raw message list, page-based pagination, WebSocket delivery, stream event lifecycle, and rendering. Written 2026-02-23 against the current codebase; updated 2026-02-24 with the page-based pagination design and append-only raw message model. Where the existing [`websocket-protocol.md`](./websocket-protocol) describes an older polling-based design, this document reflects the target implementation.
 
 ---
 
@@ -39,13 +39,13 @@ These are deliberate choices that shape the architecture. Every component should
 | # | Decision | Rationale |
 |---|----------|-----------|
 | D1 | **Backend maintains a single source of truth** | One merged, deduplicated message list per session — read from JSONL and stdout, properly reconciled. No secondary caches or parallel lists. |
-| D2 | **The message list is append-only** | Messages are never reordered or mutated in the canonical list. New data arrives at the tail. (Stream event eviction is a controlled exception — see §7.) |
+| D2 | **The message list is append-only** | Messages are never reordered or mutated in the canonical list. New data arrives at the tail. No exceptions — stream event eviction is a view concern handled at the materialized page layer (§7), not a mutation of the raw list. |
 | D3 | **Single source, multiple views** | Each consumer (WebSocket burst, HTTP pagination, session state) generates its view by reading from this one list. No copies. |
-| D4 | **Keep messages as raw as possible** | Store the bytes as received from JSONL / stdout — no re-serialization, no field stripping in the canonical list. This makes it easy to tell whether an issue originates from Claude or from our code. (Large content stripping is applied when *serving*, not when *storing*.) |
-| D5 | **Client builds the same list, paginated** | The client reconstructs the same message list as the backend, but loads it on demand — last page on connect, older pages on scroll. |
+| D4 | **Keep messages as raw as possible** | Store the bytes as received from JSONL / stdout — no re-serialization, no field stripping in the canonical list. This makes it easy to tell whether an issue originates from Claude or from our code. |
+| D5 | **Client builds the same list, paginated** | The client reconstructs the same message list as the backend, but loads it on demand — last 2 pages on connect, older pages on scroll-up via HTTP. |
 | D6 | **Client decides rendering** | The backend serves raw messages. The frontend decides what to display, what to skip, how to group, and how to style. Rendering logic lives entirely in the frontend. |
 
-> **Covered in later sections:** Stream event eviction (§7) is a deliberate exception to D2 — it removes redundant ephemeral messages after each turn to bound memory. Pagination mechanics (§6) detail how D5 works in practice.
+> **Covered in later sections:** Stream event eviction (§7) handles redundant ephemeral messages at the view layer — the raw list is never mutated. Pagination mechanics (§6) detail how D5 works in practice.
 
 ---
 
@@ -146,17 +146,29 @@ interface SessionMessageEnvelope {
 
 ### 3.2 Non-Displayable Set
 
-The following types are excluded from pagination counts and never rendered in the message list:
+The frontend defines a set of types that are never rendered in the message list:
 
-```go
-// backend — also mirrored in frontend as NON_DISPLAYABLE_TYPES
-"stream_event"
-"rate_limit_event"
-"queue-operation"
-"file-history-snapshot"
+```typescript
+// frontend — NON_DISPLAYABLE_TYPES
+const NON_DISPLAYABLE_TYPES = new Set([
+  'stream_event',
+  'rate_limit_event',
+  'queue-operation',
+  'file-history-snapshot',
+])
 ```
 
-These types are excluded from the page seal count (§6.2) and from rendered message lists on the frontend.
+**Important distinction:** "Non-displayable" is a **frontend rendering concept** (D6), not a backend pagination concept. The backend treats these differently:
+
+| Type | In raw list? | In page seal count? | In materialized page? | Frontend renders? |
+|------|-------------|--------------------|-----------------------|-------------------|
+| `stream_event` (closed) | Yes (R1) | No — excluded by eviction (§7) | No | No |
+| `stream_event` (open) | Yes (R1) | No — excluded by eviction | Yes — needed for mid-stream reconnect | Routed to streaming buffer |
+| `rate_limit_event` | Yes (R1) | **Yes** — counts toward 100 | Yes | No (intercepted for warning banner) |
+| `queue-operation` | Yes (R1) | **Yes** — counts toward 100 | Yes | No |
+| `file-history-snapshot` | Yes (R1) | **Yes** — counts toward 100 | Yes | No |
+
+Only closed `stream_event` messages are excluded from the page seal count and from materialized pages. The other non-displayable types are infrequent and count toward the 100-message seal threshold. The frontend decides not to render them (D6).
 
 ---
 
@@ -194,13 +206,13 @@ sequenceDiagram
 
 ### 4.2 Initial Burst Design
 
-On every connect, the client receives the **last page** of history (up to `DefaultPageSize = 100` displayable messages). This is a deliberate tradeoff:
+On every connect, the client receives the **last 2 pages** — the previous sealed page (~100 messages) plus the current open page. See §6.3 for the full mechanics.
 
-- **Why not all messages?** Long sessions can have thousands of messages. Sending all on every connect would be slow and wasteful.
-- **Why not zero?** The client needs recent context to reconstruct live state (current turn, pending permissions, unread markers).
-- **Why last page specifically?** It gives the user immediate context while keeping the burst bounded and predictable.
+- **Why not all messages?** Long sessions can have thousands of messages. Sending all on every connect would be slow and wasteful (G3).
+- **Why not just 1 page?** If the current page has few messages (new turn just started), the user would see almost no context. The previous sealed page guarantees ~100 messages of history.
+- **Why 2 specifically?** Bounded (~200 messages worst case) while guaranteeing enough context for the user to orient. Active stream_events in the open page enable mid-stream reconnection recovery.
 
-Older messages are fetched on demand via HTTP pagination when the user scrolls up.
+Older pages are fetched on demand via HTTP when the user scrolls up (§6.4).
 
 ### 4.3 Frontend Connection Management
 
@@ -270,7 +282,7 @@ LoadRawMessages()
   → Append raw bytes to rawMessages
 ```
 
-> **Note on large content stripping:** Read-tool results with large file bodies are stripped at parse time to reduce payload size. This is the one exception to R2 — it happens at load time, not at serving time, and is applied uniformly to all consumers. This is why WebSocket compression is intentionally disabled — content is already compact.
+> **Note on large content stripping:** Read-tool results with large file bodies are currently stripped at JSONL parse time (load time). This is the one known exception to D4/R2 — the raw bytes entering the list are modified before storage. The pragmatic justification: these payloads can be very large (full file contents), and stripping once at load is cheaper than stripping on every serve. The tradeoff: if stripping introduces a bug, the raw list won't help debug it because the original bytes are already gone. If strict D4 compliance becomes important, stripping should move to the materialization layer (serve time). For now, this is acceptable — the stripping logic is simple and well-tested, and WebSocket compression is intentionally disabled since content is already compact.
 
 ### 5.4 Live Appending
 
@@ -384,7 +396,27 @@ Frontend prepends the fetched messages to its list, preserving scroll position v
 
 When `page === 0` and the user scrolls up, all history is loaded.
 
-### 6.5 Performance Characteristics
+### 6.5 Implementation Notes
+
+**Page break storage:** The backend maintains a `pageBreaks []int` — a list of raw-list indices where each sealed page ends. These are computed incrementally as messages append. On server restart, page breaks are re-derived from the JSONL-loaded raw list by replaying the sealing rules. Since JSONL contains no `stream_event` messages (they're ephemeral stdout), the re-derivation is purely count-based and deterministic.
+
+**O(1) seal check:** The seal check runs after every append. To avoid scanning the current page on each check, maintain incrementally:
+
+```
+currentPageStart  int   // raw-list index where current page begins
+currentPageCount  int   // non-closed-stream-event count in current page
+hasOpenStream     bool  // true if stream_events exist without a following assistant
+```
+
+On each append:
+- `stream_event` → `hasOpenStream = true` (don't increment `currentPageCount`)
+- `assistant` → `hasOpenStream = false`, increment `currentPageCount`
+- any other type → increment `currentPageCount`
+- Then check: `currentPageCount >= 100 && !hasOpenStream` → seal
+
+**Sealed page serving:** Materialized page content (raw messages minus closed stream_events) can be computed once at seal time and stored alongside the break index. This avoids re-filtering on every HTTP request for sealed pages.
+
+### 6.6 Performance Characteristics
 
 | Scenario | Messages transferred on connect |
 |----------|--------------------------------|
@@ -506,6 +538,8 @@ State is broadcast via SSE (not WebSocket) to drive the session list UI and Appl
 | **UUID dedup (raw list)** | `session.go` | Prevents double-entry from JSONL+stdout overlap (G1) |
 | **UUID dedup (frontend)** | `chat-interface.tsx` | Prevents duplicate display on reconnect |
 | **Last-2-pages burst** | WS connect handler | O(2 pages) instead of O(session) on every connect |
+| **Sealed page HTTP caching** | HTTP endpoint | Sealed pages are immutable — serve with aggressive `Cache-Control` headers; browser caches eliminate repeat fetches on scroll-up |
+| **O(1) page seal check** | `session.go` | Incremental counters (`currentPageCount`, `hasOpenStream`) avoid scanning current page on every append |
 | **Read-state MAX() upsert** | `db/claude_sessions.go` | Cross-device consistency without locks |
 
 ---
@@ -584,7 +618,11 @@ The `rawMessages` slice is append-only (R1) and grows throughout a session's lif
 
 The `SessionWatcher` falls back to 5s polling if fsnotify fails. CLI-mode users could see up to 5s message delay in that case. This is filesystem-dependent and typically doesn't occur, but logging when the fallback activates would help diagnose it.
 
-### 11.6 websocket-protocol.md Is Outdated
+### 11.6 Page Break Re-derivation Cost on Restart
+
+Page break indices are held in memory. On server restart, the raw list is reloaded from JSONL and page breaks must be re-derived by replaying the sealing rules. Since JSONL contains no `stream_event` messages (they're ephemeral), re-derivation is purely count-based (seal every 100 messages). For a session with 10,000 messages this is a single O(N) scan — fast enough at startup. If this becomes a bottleneck for very large sessions, page breaks could be persisted to a metadata file alongside the JSONL.
+
+### 11.7 websocket-protocol.md Is Outdated
 
 The existing `websocket-protocol.md` describes an old polling-based architecture (500ms polls, `ReadSessionHistory`). The current implementation uses push broadcasting (`BroadcastUIMessage`), an append-only raw message list, page-based materialization, and paginated HTTP for older pages. That document should be updated or superseded by this review.
 
@@ -657,7 +695,7 @@ Common scenarios and the expected behavior at each layer. Use these to verify co
 | Layer | Behavior |
 |-------|----------|
 | Backend | Raw list is empty. `LoadRawMessages()` reads JSONL (empty or just `system:init`). |
-| WS burst | `session_info` with `totalMessages: 0` (or 1). Burst sends 0–1 messages. |
+| WS burst | `session_info` with `totalPages: 1, currentPage: 0`. Burst sends 0–1 messages (single open page). |
 | Frontend | Shows empty chat or system init. Input ready. |
 | Expected UX | Clean empty state. No spinners, no "loading" for an empty session. |
 
