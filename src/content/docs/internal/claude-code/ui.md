@@ -1331,6 +1331,7 @@ These are top-level session events that are rendered as simple status indicators
 | `system.subtype: turn_duration` | "Turn completed in Xm Ys" | Turn duration telemetry showing how long a turn took |
 | `system.subtype: hook_started` | "Hook {status}: {hook_name}" + collapsible output | Hook execution (paired with hook_response via hookResponseMap) |
 | `system.subtype: task_notification` | Summary text with status dot + optional usage stats | Background task completed/failed notification. When `usage` stats are present (agent tasks), shows duration, tool uses, and token count inline. |
+| `system.subtype: api_error` | "API error: {description}" + retry line | Claude Code failed to call the Anthropic API. Shows human-readable error + retry progress ("Retrying (N/M) in X.Xs"). Two variants: HTTP errors (`error.status`) and network errors (`error.cause.code`). Red dot. |
 | `user.isCompactSummary: true` | "Session continued" + collapsible summary | User message containing the compacted conversation summary |
 | `type: summary` | "Session summary" + summary text | Auto-generated session summary (created when session index is rebuilt) |
 

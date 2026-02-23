@@ -1402,6 +1402,10 @@ Marks where specific tool outputs were compacted to reduce context. Unlike `comp
 | `microcompactMetadata.clearedAttachmentUUIDs` | string[] | Array of attachment UUIDs that were cleared |
 
 **5c. API Error (Retry)**
+
+Two structural variants depending on the failure mode: **HTTP errors** (API responded with an error status) and **network errors** (TCP/TLS layer failure, never reached the API).
+
+**Variant A: HTTP error** (e.g. server overloaded, rate limited):
 ```json
 {
   "parentUuid": "b92bd8a9-4789-4180-8702-53cfcedce96e",
@@ -1428,14 +1432,63 @@ Marks where specific tool outputs were compacted to reduce context. Unlike `comp
 }
 ```
 
+**Variant B: Network error** (e.g. TLS certificate verification failure):
+```json
+{
+  "parentUuid": "55387795-189f-4423-a861-1f6444bbf6d1",
+  "type": "system",
+  "subtype": "api_error",
+  "level": "error",
+  "cause": {
+    "code": "UNKNOWN_CERTIFICATE_VERIFICATION_ERROR",
+    "path": "https://api.anthropic.com/v1/messages?beta=true",
+    "errno": 0
+  },
+  "error": {
+    "cause": {
+      "code": "UNKNOWN_CERTIFICATE_VERIFICATION_ERROR",
+      "path": "https://api.anthropic.com/v1/messages?beta=true",
+      "errno": 0
+    }
+  },
+  "retryInMs": 2306.629048309388,
+  "retryAttempt": 3,
+  "maxRetries": 10,
+  "timestamp": "2026-02-23T13:20:15.439Z",
+  "uuid": "838b50e7-233e-4987-bff6-bcd659dedd73"
+}
+```
+
+Note: in network errors, the `cause` field appears **both** at the top level of the message and nested inside `error.cause`. They are identical.
+
 **API Error Fields**:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `error` | object | Error details from API (status, type, message) |
-| `retryInMs` | number | Milliseconds until retry |
-| `retryAttempt` | number | Current retry attempt (1-indexed) |
-| `maxRetries` | number | Maximum retries configured |
+| `retryInMs` | number | Milliseconds until next retry attempt |
+| `retryAttempt` | number | Current retry attempt number (1-indexed) |
+| `maxRetries` | number | Maximum number of retries configured |
+| `error` | object | Error payload (structure differs by variant — see below) |
+| `cause` | object | **(Network errors only)** Top-level copy of `error.cause` |
+
+**HTTP error** (`error` fields):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `error.status` | number | HTTP status code (e.g. 529, 529) |
+| `error.headers` | object | Response headers |
+| `error.requestID` | string | Anthropic request ID for tracing |
+| `error.error.type` | string | Always `"error"` |
+| `error.error.error.type` | string | Error type (e.g. `"overloaded_error"`) |
+| `error.error.error.message` | string | Human-readable error message |
+
+**Network error** (`error` fields):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `error.cause.code` | string | Node.js error code (e.g. `"UNKNOWN_CERTIFICATE_VERIFICATION_ERROR"`, `"ECONNREFUSED"`) |
+| `error.cause.path` | string | URL that was requested |
+| `error.cause.errno` | number | OS-level error number |
 
 **5d. Local Command**
 ```json
