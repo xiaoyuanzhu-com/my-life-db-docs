@@ -63,7 +63,7 @@ graph TD
         SUBSCRIBE["/subscribe WebSocket\nClaudeSubscribeWebSocket()"]
         TERMINAL["/ws WebSocket\n(PTY binary — CLI mode only)"]
         HTTP_MSG["GET /messages\n(HTTP pagination)"]
-        SESSION["session.go\n(cachedMessages, broadcast)"]
+        SESSION["session.go\n(rawMessages, broadcast)"]
         READER["session_reader.go\n(JSONL parse)"]
         WATCHER["session_watcher.go\n(CLI mode file watch)"]
         DB["DB\n(read state, archive)"]
@@ -135,14 +135,14 @@ interface SessionMessageEnvelope {
 
 **Bidirectional control:**
 
-| Type | Direction | Cached? | Description |
+| Type | Direction | Stored? | Description |
 |------|-----------|---------|-------------|
 | `control_request` | S→C | ✅ Yes | Permission request (tool use) |
 | `control_response` | C→S | ✅ Yes | Permission decision |
 | `set_permission_mode` | C→S | ❌ No | Transient mode change |
 
-> **Why is `set_permission_mode` not cached?**
-> If it were cached, every new client that connects would re-receive and re-apply old mode switches. Broadcasting without caching means only currently-connected clients see it.
+> **Why is `set_permission_mode` not stored?**
+> If it were stored in the raw list, every new client that connects would re-receive and re-apply old mode switches. Broadcasting without storing means only currently-connected clients see it.
 
 ### 3.2 Non-Displayable Set
 
@@ -156,7 +156,7 @@ The following types are excluded from pagination counts and never rendered in th
 "file-history-snapshot"
 ```
 
-This ensures `historyOffset` math is stable — adding or removing streaming events doesn't shift page boundaries.
+These types are excluded from the page seal count (§6.2) and from rendered message lists on the frontend.
 
 ---
 
@@ -168,27 +168,27 @@ This ensures `historyOffset` math is stable — adding or removing streaming eve
 sequenceDiagram
     participant C as Client (React)
     participant S as Go Backend
-    participant Cache as Session Cache
+    participant RM as Raw Messages
     participant Proc as Claude Process
 
     C->>S: WS Upgrade /subscribe
-    S->>Cache: LoadMessageCache() if cold
-    S->>S: Compute historyOffset (last page boundary)
-    S->>C: session_info { totalMessages, historyOffset, ... }
-    S->>C: Burst: last N cached messages (last page)
+    S->>RM: LoadRawMessages() if cold
+    S->>S: Determine last 2 pages
+    S->>C: session_info { totalPages, currentPage, ... }
+    S->>C: Burst: last 2 pages (materialized — closed stream_events excluded from sealed pages)
     Note over C,S: Connection established
 
     loop Live streaming
         Proc->>S: stdout (stream_event, assistant, result, ...)
-        S->>Cache: BroadcastUIMessage() → append + fan-out
+        S->>RM: BroadcastUIMessage() → append + fan-out
         S->>C: message (JSON frame)
     end
 
     C--xS: Disconnect (tab close / network drop)
-    Note over S: Session remains active, cache intact
+    Note over S: Session remains active, raw messages intact
 
     C->>S: Reconnect (same session ID)
-    S->>C: Burst: last N cached messages again
+    S->>C: Burst: last 2 pages again
     Note over C: Dedup by UUID — no duplicates shown
 ```
 
@@ -232,150 +232,172 @@ CLI mode uses `SessionWatcher` (fsnotify + polling fallback at 5s) to detect new
 
 ---
 
-## 5. Message Cache
+## 5. Raw Messages
 
-### 5.1 Cache Structure
+The raw message list is the backend's single source of truth for a session's messages (D1). It is the foundation that all views — WebSocket burst, HTTP pagination, session state — are derived from (D3).
+
+### 5.1 Rules
+
+| # | Rule | Detail |
+|---|------|--------|
+| R1 | **Append-only** | Messages are only ever appended to the tail. No deletions, no reordering, no in-place mutations. This is the foundational invariant — pagination, deduplication, and debugging all depend on it. |
+| R2 | **Raw bytes** | Store the JSON bytes as received from JSONL / stdout. No re-serialization, no field stripping, no transformation. If something looks wrong, you can diff the raw bytes against Claude's output to isolate the source (D4). |
+| R3 | **Deduplicated** | Every message with a UUID is tracked. Duplicates (from JSONL + stdout overlap) are silently discarded before appending (G1). |
+| R4 | **Single source** | There is one list per session. No secondary caches, no copies. Every consumer reads from this list (D3). |
+
+### 5.2 Structure
 
 ```go
 // session.go
 type Session struct {
-    cachedMessages [][]byte        // Raw JSON bytes (passthrough — never re-serialized)
-    seenUUIDs      map[string]bool // UUID dedup
-    cacheLoaded    bool
-    cacheMu        sync.RWMutex
+    rawMessages [][]byte        // Append-only raw JSON bytes from JSONL + stdout
+    seenUUIDs   map[string]bool // UUID dedup — ensures exactly-once append
+    loaded      bool
+    mu          sync.RWMutex
 }
 ```
 
-The cache stores raw bytes, not parsed structs. This is deliberate — parsing every message on every reconnect would be wasteful, and we never need to mutate message content.
+Raw bytes, not parsed structs. Parsing on every reconnect would be wasteful, and we never mutate message content (R2).
 
-### 5.2 Loading
+### 5.3 Loading
 
-Cache is loaded once from the session JSONL file on first activation:
+The list is populated once from the session JSONL file on first activation:
 
 ```
-LoadMessageCache()
+LoadRawMessages()
   → Read JSONL line by line
-  → For each line: parseTypedMessage() → strip large read-tool content
-  → Track UUID in seenUUIDs
-  → Append raw bytes to cachedMessages
+  → For each line: parseTypedMessage() → track UUID in seenUUIDs
+  → Append raw bytes to rawMessages
 ```
 
-Large read-tool results are stripped at parse time, reducing payload size across all WebSocket and HTTP responses. This is why WebSocket compression is intentionally disabled — the content is already compact.
+> **Note on large content stripping:** Read-tool results with large file bodies are stripped at parse time to reduce payload size. This is the one exception to R2 — it happens at load time, not at serving time, and is applied uniformly to all consumers. This is why WebSocket compression is intentionally disabled — content is already compact.
 
-### 5.3 Live Appending: BroadcastUIMessage vs BroadcastToClients
+### 5.4 Live Appending
 
-Two broadcast methods with different caching behavior:
+Two broadcast methods control whether a message enters the raw list:
 
 ```
-BroadcastUIMessage(data)      → cache + fan-out to all connected clients
-BroadcastToClients(data)      → fan-out only (NOT cached)
+BroadcastUIMessage(data)      → append to rawMessages + fan-out to all connected clients
+BroadcastToClients(data)      → fan-out only (NOT stored)
 ```
 
 | Used for | Method | Reason |
 |----------|--------|--------|
 | `user`, `assistant`, `result`, `progress`, `system` | BroadcastUIMessage | Durable history — new clients need these |
 | `control_request`, `control_response` | BroadcastUIMessage | State-critical — reconnecting clients need pending permissions |
+| `stream_event` | BroadcastUIMessage | Needed for mid-stream reconnection recovery |
 | `set_permission_mode` response | BroadcastToClients | Transient — should NOT be replayed on reconnect |
-| `stream_event` | BroadcastUIMessage | Cached during streaming for mid-stream reconnect recovery |
 
-### 5.4 Deduplication
+### 5.5 Deduplication
 
-Before appending to cache:
+Before appending:
 
 ```go
 if uuid != "" && seenUUIDs[uuid] {
-    return  // Already in cache (e.g. from JSONL load + stdout overlap)
+    return  // Already in list (e.g. from JSONL load + stdout overlap)
 }
 seenUUIDs[uuid] = true
-cachedMessages = append(cachedMessages, data)
+rawMessages = append(rawMessages, data)
 ```
 
-This handles the JSONL-vs-stdout race: in CLI mode, the watcher may pick up a message that was already added via stdout. UUID tracking ensures exactly-once delivery.
+This handles the JSONL-vs-stdout overlap: in CLI mode, the watcher may pick up a message that was already added via stdout. UUID tracking ensures exactly-once delivery (G1).
 
 ---
 
 ## 6. Pagination
 
-### 6.1 Design: Last-Page-First + Backward Scroll
+Pagination delivers the raw message list (§5) to clients in bounded chunks. The design is built on one key property: since the raw list is append-only (R1), **all pages except the last are immutable once sealed**.
+
+### 6.1 Page Model
+
+Pages are a backend concept, shared across all clients (D5). The backend maintains a list of page break indices that partition the raw message list.
 
 ```
-Session has 450 displayable messages (excluding stream_events, etc.)
-DefaultPageSize = 100
+rawMessages:  [m0, m1, m2, ..., m102, m103, ..., m209, m210, ..., m285]
+                 |--- page 0 (sealed) ---|--- page 1 (sealed) ---|--- page 2 (open) ---|
+pageBreaks:   [103, 210]
+```
+
+| Property | Sealed pages | Current (last) page |
+|----------|-------------|---------------------|
+| Content changes? | Never — immutable once sealed | Grows as new messages append |
+| HTTP cacheable? | Yes — aggressive cache headers | No — must be fetched live |
+| Contains stream_events? | No — evicted before sealing | May contain active stream_events |
+
+### 6.2 Page Sealing Rules
+
+A page seals when **both** conditions are met:
+
+1. **Size threshold:** The page has **>= 100 messages after eviction** — stream_events whose `assistant` message has arrived are excluded from the count (see §7)
+2. **No open stream:** All streaming turns within the page are closed — meaning every run of `stream_event` messages has a corresponding `assistant` message
+
+The seal check runs after each message is appended to the raw list. When a page seals, its break index is recorded and the next message starts a new page.
+
+**Why both conditions?** Stream_events and their `assistant` message must be on the same page. If a page sealed mid-stream, the `assistant` would land on the next page, and the eviction count would span two pages — breaking the immutability of the sealed page (see §7 for details).
+
+**Design notes:**
+- Page boundaries do not align with turn boundaries. A turn's messages may span two pages. This is intentional — pages are a delivery mechanism, not a semantic grouping.
+- The ">= 100 after eviction" count includes all message types (user, assistant, result, progress, system, control_request, etc.) except evicted stream_events. The backend does not filter by displayability — that is the client's job (D6).
+- Multi-cycle turns (stream → assistant with tool_use → tool executes → stream → assistant → result) trigger eviction on each `assistant`. The page may seal after any of these if the count reaches 100.
+
+### 6.3 Connection: Last 2 Pages + Live Updates
+
+On WebSocket connect, the backend sends:
+
+```
+1. session_info { totalPages, currentPage, ... }
+2. Messages from the last 2 pages (previous sealed page + current open page)
+3. All subsequent live messages as they arrive
+```
+
+**Why 2 pages?** If the current page has only a few messages (new turn just started), a single page would give the client almost no context. The previous sealed page provides ~100 messages of history. Worst case (current page nearly full): ~200 messages — still bounded and fast.
+
+```
+Session has 5 sealed pages + 1 open page:
 
 On connect:
-  historyOffset = 400  (last page boundary)
-  Burst: messages [400..449]
+  Burst: page 4 (sealed, ~100 msgs) + page 5 (open, N msgs)
 
-User scrolls up → loadOlderMessages():
-  offset = max(0, 400 - 100) = 300
-  HTTP GET /messages?offset=300&limit=100
-  → messages [300..399]
-  historyOffset = 300
-
-User scrolls up again:
-  offset = max(0, 300 - 100) = 200
-  HTTP GET /messages?offset=200&limit=100
-  → messages [200..299]
-  historyOffset = 200
+Live:
+  New messages appended to page 5, forwarded to client in real time
+  If page 5 seals, page 6 starts — client continues receiving live
 ```
 
-Each backward load prepends to the message list and updates `historyOffset`. The scroll position is preserved by measuring height delta before/after prepend.
+### 6.4 Scroll-Up: HTTP for Older Pages
 
-### 6.2 HTTP Endpoint
-
-**Backend:** `GetClaudeSessionMessages()` in `backend/api/claude.go`
+Older pages are fetched on demand when the user scrolls up. Since sealed pages are immutable, these are simple HTTP GETs that can be cached aggressively.
 
 ```
-GET /api/claude/sessions/:id/messages?offset=N&limit=100
+GET /api/claude/sessions/:id/messages?page=3
 
 Response:
 {
   sessionId: string
-  mode: "ui" | "cli"
-  messages: SessionMessage[]   // filtered: no non-displayable types
-  totalCount: number           // count of displayable messages only
-  offset: number
-  limit: number
+  page: number
+  totalPages: number
+  messages: SessionMessage[]   // raw messages in this page
+  sealed: boolean              // true for all pages except the last
 }
 ```
 
-The filter is applied identically on both the HTTP endpoint and the initial WS burst, so `historyOffset` arithmetic is consistent.
+Frontend prepends the fetched messages to its list, preserving scroll position via `useLayoutEffect` height-delta adjustment (same mechanism as current — see §12.1). Deduplication by UUID handles any overlap.
 
-### 6.3 Frontend Implementation
+When `page === 0` and the user scrolls up, all history is loaded.
 
-**File:** `frontend/app/components/claude/chat/chat-interface.tsx`
-
-```typescript
-const loadOlderMessages = async () => {
-  const offset = Math.max(0, historyOffset - 100)
-  const response = await fetch(`/api/claude/sessions/${sessionId}/messages?offset=${offset}&limit=100`)
-  const data = await response.json()
-
-  const newMessages = data.messages.filter(m => !NON_DISPLAYABLE_TYPES.has(m.type))
-
-  setHistoryOffset(offset)
-  setRawMessages(prev => {
-    // Deduplicate by UUID, prepend
-    const existing = new Set(prev.map(m => m.uuid))
-    const unique = newMessages.filter(m => !existing.has(m.uuid))
-    return [...unique, ...prev]
-  })
-}
-```
-
-Triggered by scroll-to-top detection in `message-list.tsx`. When `historyOffset === 0`, no more older messages exist.
-
-### 6.4 Performance Characteristics
+### 6.5 Performance Characteristics
 
 | Scenario | Messages transferred on connect |
 |----------|--------------------------------|
-| Short session (< 100 msgs) | All messages |
-| Long session (1000 msgs) | Last 100 only |
-| Reconnect mid-stream | Last 100 (includes stream_events) |
+| Short session (< 100 msgs) | All messages (1 page, not yet sealed) |
+| Long session (1000 msgs) | Last ~200 (2 pages) |
+| Reconnect mid-stream | Last ~200 (includes stream_events in open page) |
+| Scroll-up (per request) | ~100 (1 sealed page, HTTP cacheable) |
 
 ---
 
 ## 7. Stream Event Lifecycle
+
+Stream events are the highest-volume message type and the only type that becomes fully redundant after a turn completes. This section describes their lifecycle and how eviction works within the page model.
 
 ### 7.1 What Are Stream Events?
 
@@ -396,66 +418,62 @@ They arrive in order: `message_start` → `content_block_start` → N×`content_
 
 The frontend buffers and flushes these every **40ms** to smooth rendering and batch React state updates.
 
-### 7.2 Why Cache Stream Events At All?
+### 7.2 Why Keep Stream Events in the Raw List?
 
-Caching stream events during generation handles one edge case: **mid-stream reconnection**. If the client drops and reconnects while Claude is generating, it receives the accumulated stream events and can resume showing the partial text without waiting for the final `assistant` message.
+Stream events are appended to the raw message list like any other message (R1 — append-only). They serve one purpose there: **mid-stream reconnection recovery**. If the client drops and reconnects while Claude is generating, the raw list contains the accumulated stream events. The client receives them in the WS burst and can resume showing partial text without waiting for the final `assistant` message.
 
-### 7.3 Eviction After Completion
+### 7.3 Eviction at the Materialized Layer
 
-When the final `assistant` message arrives, stream events are immediately evicted from the cache:
+The raw message list is never mutated (R1). Eviction is a **view concern** — it happens when materializing pages for serving, not by modifying the raw list.
 
-```go
-// Triggered from BroadcastUIMessage when type == "assistant"
-func (s *Session) evictStreamEvents() {
-    s.cacheMu.Lock()
-    defer s.cacheMu.Unlock()
+**The closure signal:** When an `assistant` message arrives, it contains the full text that the preceding `stream_event` deltas were building. The stream events are now redundant. The `assistant` message is the "stream closure" signal.
 
-    n := 0
-    for _, msg := range s.cachedMessages {
-        if !isStreamEvent(msg) {
-            s.cachedMessages[n] = msg
-            n++
-        }
-    }
-    s.cachedMessages = s.cachedMessages[:n]
-}
-
-func isStreamEvent(data []byte) bool {
-    // Fast path: check first 100 bytes before JSON parse
-    prefix := data
-    if len(prefix) > 100 {
-        prefix = prefix[:100]
-    }
-    if !bytes.Contains(prefix, []byte(`"stream_event"`)) {
-        return false
-    }
-    var env struct{ Type string }
-    json.Unmarshal(data, &env)
-    return env.Type == "stream_event"
-}
-```
-
-**Rationale:** After streaming completes, the full text is in the `assistant` message. Stream events are redundant and would waste memory for the rest of the session's lifetime. Clients reconnecting post-completion get the `assistant` message directly and don't need deltas.
-
-**Timing sequence:**
+**How it works:**
 
 ```
-stream_event(delta 1)  → cached
-stream_event(delta 2)  → cached
+Raw list (append-only, never mutated):
+  [..., stream_event, stream_event, ..., stream_event, assistant, result, ...]
+                                                          ↑ closure signal
+
+Page materialization (view layer):
+  → When building page contents for serving (WS burst or HTTP),
+    skip stream_events that have a corresponding assistant message
+  → Stream_events with NO following assistant (active streaming) are KEPT —
+    they're needed for mid-stream reconnection
+
+Page seal check (after each append):
+  → Count messages in current page, excluding closed stream_events
+  → If count >= 100 AND no open stream → seal the page
+```
+
+**Why not mutate the raw list?**
+- R1 (append-only) is the foundational invariant. Mutating the list would complicate deduplication, pagination index arithmetic, and debugging.
+- The raw list is the debugging baseline (D4). If streaming output looks wrong, you can inspect the raw bytes to determine whether the issue is in Claude's output or in our materialization logic.
+- The view layer already needs to filter when serving (e.g., the client decides what to render per D6). Excluding closed stream_events is one more filter in the same pass — no extra work.
+
+### 7.4 Timing Sequence
+
+```
+stream_event(delta 1)  → appended to raw list
+stream_event(delta 2)  → appended to raw list
 ...
-stream_event(delta N)  → cached
-assistant(full text)   → cached, then evictStreamEvents() runs
-                                  → all stream_events removed from cache
+stream_event(delta N)  → appended to raw list
+assistant(full text)   → appended to raw list
+                          → stream_events before this assistant are now "closed"
+                          → page seal check: count after eviction >= 100? seal if so.
+result(turn complete)  → appended to raw list
+                          → page seal check again
 ```
 
-### 7.4 Potential Race Condition
+At no point is the raw list modified. The eviction is purely logical — a filter applied when reading.
 
-If new `stream_event` messages arrive *after* `evictStreamEvents()` runs (theoretically possible due to async goroutines), they would be re-added to the cache. In practice this is extremely unlikely because:
-1. The `assistant` message is the final output of the Claude process for that turn
-2. No more stdout arrives after the assistant message for that turn
-3. The eviction is synchronous under the cache lock
+### 7.5 Stream Closure Safety
 
-This is an acceptable risk given the frequency (effectively zero) and consequence (a few extra bytes in cache that would be evicted on the next turn).
+Stream events from stdout are guaranteed to arrive before their `assistant` message — they flow through a single goroutine reading sequentially from Claude's stdout. No race condition is possible between `stream_event` and `assistant` delivery. This means the closure signal (`assistant` arrival) is always correctly ordered relative to the stream events it closes.
+
+### 7.6 Memory Consideration
+
+Since the raw list retains all stream_events for the session's lifetime, a session with many long streaming turns accumulates bytes that are never served after closure. For typical sessions this is negligible (stream events are small). For very long sessions, a background compaction step could trim the raw list by writing sealed page contents to a snapshot and releasing the underlying raw bytes — but this is an optimization, not a correctness concern.
 
 ---
 
@@ -479,15 +497,15 @@ State is broadcast via SSE (not WebSocket) to drive the session list UI and Appl
 
 | Optimization | Where | Impact |
 |-------------|-------|--------|
-| **Stream event eviction** | `session.go` | Frees N×delta messages after each turn |
+| **Stream event eviction** | Page materialization | Closed stream_events excluded from page views — raw list untouched (R1) |
 | **Large content stripping** | `session_reader.go` | Removes file body from read-tool results at parse time |
-| **Non-displayable filtering** | Both WS burst and HTTP | Keeps pagination math clean, reduces noise |
+| **Non-displayable filtering** | Page materialization + frontend | Backend excludes closed stream_events; frontend decides what to render (D6) |
 | **Token buffer flush (40ms)** | `chat-interface.tsx` | Batches stream_event renders, reduces re-render churn |
 | **Lazy WS connection** | `use-session-websocket.ts` | No connection until user interacts |
 | **WS compression disabled** | Backend WS upgrade | Lower memory overhead (content already compact after stripping) |
-| **UUID dedup (cache)** | `session.go` | Prevents double-entry from JSONL+stdout overlap |
+| **UUID dedup (raw list)** | `session.go` | Prevents double-entry from JSONL+stdout overlap (G1) |
 | **UUID dedup (frontend)** | `chat-interface.tsx` | Prevents duplicate display on reconnect |
-| **Last-page-first burst** | WS connect handler | O(page) instead of O(session) on every connect |
+| **Last-2-pages burst** | WS connect handler | O(2 pages) instead of O(session) on every connect |
 | **Read-state MAX() upsert** | `db/claude_sessions.go` | Cross-device consistency without locks |
 
 ---
@@ -512,21 +530,21 @@ sequenceDiagram
 
     loop Token streaming
         Proc->>Sess: stdout stream_event
-        Sess->>Sess: BroadcastUIMessage → cache + fan-out
+        Sess->>Sess: BroadcastUIMessage → append to rawMessages + fan-out
         Sess->>WS: stream_event frame
         WS->>C: stream_event
         C->>C: accumulate → flush every 40ms → render partial text
     end
 
     Proc->>Sess: stdout assistant (full message)
-    Sess->>Sess: BroadcastUIMessage → cache
-    Sess->>Sess: evictStreamEvents()
+    Sess->>Sess: BroadcastUIMessage → append to rawMessages (stream_events now "closed")
+    Sess->>Sess: Page seal check (count after eviction >= 100?)
     Sess->>WS: assistant frame
     WS->>C: assistant
     C->>C: clear optimistic, render final message
 
     Proc->>Sess: stdout result (turn complete)
-    Sess->>Sess: BroadcastUIMessage → cache, resultCount++
+    Sess->>Sess: BroadcastUIMessage → append to rawMessages, resultCount++
     Sess->>WS: result frame
     WS->>C: result
     C->>C: isWorking = false, mark as unread if needed
@@ -550,11 +568,11 @@ The terminal component (`terminal.tsx`) correctly reconnects when the tab become
 
 **Fix:** Add `document.addEventListener('visibilitychange', ...)` to `use-session-websocket.ts`, mirroring the terminal implementation.
 
-### 11.3 Unbounded Cache Growth
+### 11.3 Raw List Memory Growth
 
-The `cachedMessages` slice grows throughout a session's lifetime and is only reset on `ReloadMessageCache()` (called during re-activation). A session with many turns could accumulate significant memory. Stream events are evicted per-turn, but all other message types stay forever.
+The `rawMessages` slice is append-only (R1) and grows throughout a session's lifetime. Since eviction is now a view concern (§7.3), stream_events are retained in the raw list even after their `assistant` message arrives. All message types stay in memory for the session's duration.
 
-**Consideration:** A background compaction step that periodically writes a snapshot and trims the in-memory slice would cap memory use. Not urgent for typical session lengths, but worth tracking for very long-running sessions.
+**Consideration:** For sealed pages, a background compaction step could write the materialized page contents (with closed stream_events excluded) to a snapshot file and release the raw bytes from memory. This would cap in-memory growth to approximately 2 pages (the live serving window). Not urgent for typical session lengths, but worth tracking for very long-running sessions.
 
 ### 11.4 Permission Mode Not Persisted
 
@@ -568,7 +586,7 @@ The `SessionWatcher` falls back to 5s polling if fsnotify fails. CLI-mode users 
 
 ### 11.6 websocket-protocol.md Is Outdated
 
-The existing `websocket-protocol.md` describes an old polling-based architecture (500ms polls, `ReadSessionHistory`, no caching). The current implementation uses push broadcasting (`BroadcastUIMessage`), an in-memory cache, and paginated HTTP for older messages. That document should be updated or superseded by this review.
+The existing `websocket-protocol.md` describes an old polling-based architecture (500ms polls, `ReadSessionHistory`). The current implementation uses push broadcasting (`BroadcastUIMessage`), an append-only raw message list, page-based materialization, and paginated HTTP for older pages. That document should be updated or superseded by this review.
 
 ---
 
@@ -595,7 +613,7 @@ The 40ms flush interval for stream events is a good balance:
 
 ## 13. Cross-Client Consistency
 
-The backend serves three client types from the same session cache:
+The backend serves three client types from the same raw message list:
 
 | Client | Connection | Notes |
 |--------|-----------|-------|
@@ -609,7 +627,7 @@ The Apple client does **not** stream messages via WebSocket — it receives sess
 
 ## 14. Review Summary
 
-The cloud session messages system is **well-architected** for its requirements. The two-tier WebSocket design cleanly separates binary PTY traffic from structured chat messages. The cache-and-broadcast model gives reconnecting clients instant context without re-reading from disk. Pagination with non-displayable filtering keeps the math clean. Stream event eviction is elegant — keep what you need for reconnection recovery, drop it the moment it becomes redundant.
+The cloud session messages system is **well-architected** for its requirements. The two-tier WebSocket design cleanly separates binary PTY traffic from structured chat messages. The append-only raw message list (§5) gives a single source of truth that all views derive from. Page-based pagination (§6) with stable, immutable sealed pages keeps delivery bounded and HTTP-cacheable. Stream event eviction at the materialized layer (§7) keeps what you need for reconnection recovery while excluding redundant data from served pages — without mutating the raw list.
 
 **Highest-value improvements (in order):**
 
@@ -620,9 +638,11 @@ The cloud session messages system is **well-architected** for its requirements. 
 5. **Message list virtualization** — future-proofing for very long sessions (large effort, low urgency now)
 
 **Things that are working well:**
-- UUID-based deduplication at every layer (cache, HTTP response, frontend)
-- Stream event lifecycle (cache during stream → evict on completion)
-- Last-page-first burst keeping initial connect O(page) not O(session)
+- Append-only raw message list as single source of truth (R1, D1)
+- UUID-based deduplication at every layer (raw list, page serving, frontend)
+- Stream event lifecycle (kept in raw list for reconnection → excluded from sealed pages at materialization)
+- Page-based pagination with immutable sealed pages (HTTP cacheable, stable boundaries)
+- Last-2-pages burst keeping initial connect O(2 pages) not O(session)
 - Large content stripping at JSONL parse time keeping payloads small
 - Cross-device read state via DB MAX() upsert
 
@@ -636,7 +656,7 @@ Common scenarios and the expected behavior at each layer. Use these to verify co
 
 | Layer | Behavior |
 |-------|----------|
-| Backend | Cache is empty. `LoadMessageCache()` reads JSONL (empty or just `system:init`). |
+| Backend | Raw list is empty. `LoadRawMessages()` reads JSONL (empty or just `system:init`). |
 | WS burst | `session_info` with `totalMessages: 0` (or 1). Burst sends 0–1 messages. |
 | Frontend | Shows empty chat or system init. Input ready. |
 | Expected UX | Clean empty state. No spinners, no "loading" for an empty session. |
@@ -645,8 +665,8 @@ Common scenarios and the expected behavior at each layer. Use these to verify co
 
 | Layer | Behavior |
 |-------|----------|
-| Backend | Cache has completed turns. Stream events already evicted. |
-| WS burst | Last page of displayable messages (up to 100). `session_info` with accurate `totalMessages`. |
+| Backend | Raw list has completed turns. No open streams. All previous pages sealed. |
+| WS burst | Last 2 pages — sealed page (~100 msgs, closed stream_events excluded) + current page. |
 | Frontend | Dedup by UUID — messages already in `rawMessages` are skipped. New ones appended. No clear-and-refill. |
 | Expected UX | Seamless. User sees the same messages. No flash, no scroll jump. |
 
@@ -654,8 +674,8 @@ Common scenarios and the expected behavior at each layer. Use these to verify co
 
 | Layer | Behavior |
 |-------|----------|
-| Backend | Cache has completed turns + current turn's stream events at tail. |
-| WS burst | Last page of displayable messages + tail stream events (raw cache from `historyOffset`). |
+| Backend | Raw list has completed turns + current turn's stream events at tail. Current page is open (stream not closed). |
+| WS burst | Last 2 pages — previous sealed page + current open page (includes active stream_events). |
 | Frontend | Displayable messages → `rawMessages`. Stream events → streaming buffer. Streaming text resumes rendering. |
 | Expected UX | User sees message history + partial streaming text. Streaming continues from where it was. No lost tokens. |
 
@@ -663,33 +683,33 @@ Common scenarios and the expected behavior at each layer. Use these to verify co
 
 | Layer | Behavior |
 |-------|----------|
-| Backend | `displayableCount` used to compute `historyOffset`. Only last page served on connect. |
-| WS burst | Up to 100 displayable messages + `session_info` with full `totalMessages`. |
-| Frontend | Renders last page. `historyOffset > 0` enables scroll-up loading. |
-| Expected UX | Fast initial load. User sees recent context. Scroll up reveals "load more" or auto-fetches older pages. |
+| Backend | Many sealed pages + current open page. |
+| WS burst | Last 2 pages (~200 messages). `session_info` with `totalPages`. |
+| Frontend | Renders last 2 pages. `currentPage > 1` enables scroll-up loading. |
+| Expected UX | Fast initial load. User sees recent context. Scroll up fetches older sealed pages via HTTP. |
 
 ### 15.5 Scroll Up — Load Older Pages
 
 | Layer | Behavior |
 |-------|----------|
-| HTTP | `GET /messages?offset=N&limit=100`. Backend filters non-displayable first, then slices. Page always has up to 100 displayable messages. |
-| Frontend | Dedup by UUID, prepend to `rawMessages`. `useLayoutEffect` adjusts scroll position by height delta. `historyOffset` decremented. |
-| Expected UX | Older messages appear above. No scroll jump. When `historyOffset === 0`, all history loaded. |
+| HTTP | `GET /messages?page=N`. Sealed page served with aggressive cache headers. ~100 messages per page (closed stream_events excluded). |
+| Frontend | Dedup by UUID, prepend to `rawMessages`. `useLayoutEffect` adjusts scroll position by height delta. |
+| Expected UX | Older messages appear above. No scroll jump. When `page === 0`, all history loaded. Sealed pages cached by browser — instant on revisit. |
 
-### 15.6 Long Streaming Turn (Many Stream Events in Cache)
+### 15.6 Long Streaming Turn (Many Stream Events in Raw List)
 
 | Layer | Behavior |
 |-------|----------|
-| Backend | Stream events accumulate at cache tail. Previous turns' events already evicted. |
-| WS burst (if reconnect) | `historyOffset` based on displayable count — points into the displayable region. Slice includes displayable messages + tail stream events. |
+| Backend | Stream events accumulate in raw list (R1 — append-only). Current page stays open (stream not closed, seal blocked). |
+| WS burst (if reconnect) | Last 2 pages — previous sealed page (no stream_events) + current open page (includes active stream_events). |
 | Frontend | Stream events routed to buffer (40ms flush). Displayable messages populate `rawMessages`. |
-| Expected UX | Message list shows completed turns. Streaming text renders smoothly. No blank screen — displayable messages are always present before the stream event tail. |
+| Expected UX | Message list shows completed turns. Streaming text renders smoothly. No blank screen — previous sealed page guarantees displayable messages are present. |
 
-### 15.7 Turn Completes — Stream Event Eviction
+### 15.7 Turn Completes — Stream Event Closure and Page Seal
 
 | Layer | Behavior |
 |-------|----------|
-| Backend | `assistant` message arrives → `BroadcastUIMessage` caches it → `evictStreamEvents()` removes all stream events from cache (under lock). |
+| Backend | `assistant` message appended to raw list → stream_events before it are now "closed" → page seal check: count after eviction >= 100? If yes, seal and start new page. |
 | WS live | `assistant` frame sent to all connected clients. |
 | Frontend | Receives `assistant` message. Clears streaming buffer. Renders final message in `rawMessages`. |
 | Expected UX | Streaming text replaced by final formatted message. No flicker — React 18 batches the clear + render. |
@@ -698,7 +718,7 @@ Common scenarios and the expected behavior at each layer. Use these to verify co
 
 | Layer | Behavior |
 |-------|----------|
-| Backend | `rate_limit_event` broadcast to clients (cached via `BroadcastUIMessage`). |
+| Backend | `rate_limit_event` appended to raw list via `BroadcastUIMessage`, broadcast to clients. |
 | Frontend | `handleMessage` intercepts before `rawMessages`. If `utilization >= 0.75` or `status === 'allowed_warning'` → `setRateLimitWarning`. |
 | Expected UX | Amber banner appears above input. Shows utilization %, window type, reset time. Dismissible. Does **not** appear as a chat message. |
 
@@ -706,7 +726,7 @@ Common scenarios and the expected behavior at each layer. Use these to verify co
 
 | Layer | Behavior |
 |-------|----------|
-| Backend | `control_request` cached via `BroadcastUIMessage` (survives reconnect). |
+| Backend | `control_request` appended to raw list via `BroadcastUIMessage` (survives reconnect). |
 | Frontend | `handleMessage` routes to `permissions.handleControlRequest`. Renders permission UI inline. |
 | User action | Approve/deny → `control_response` sent via WS. Backend forwards to Claude stdin. |
 | Expected UX | Permission prompt appears inline in the message flow. Persists across reconnects until resolved. |
@@ -715,7 +735,7 @@ Common scenarios and the expected behavior at each layer. Use these to verify co
 
 | Layer | Behavior |
 |-------|----------|
-| Backend | Unknown type passes through — raw bytes cached, broadcast, served. No parsing failure. |
+| Backend | Unknown type passes through — raw bytes appended to list, broadcast, served. No parsing failure. |
 | Frontend | Falls through to `UnknownMessageBlock` — renders raw JSON in a collapsible block. |
 | Expected UX | User sees the message (not silently dropped). Raw JSON aids debugging. Developer adds proper rendering later per G6. |
 
@@ -723,7 +743,7 @@ Common scenarios and the expected behavior at each layer. Use these to verify co
 
 | Layer | Behavior |
 |-------|----------|
-| Backend | Each WS client registered as subscriber. `BroadcastUIMessage` fans out to all. Same cache serves all HTTP pagination requests. |
+| Backend | Each WS client registered as subscriber. `BroadcastUIMessage` fans out to all. Same raw message list serves all HTTP pagination requests. |
 | Read state | `MarkClaudeSessionRead` uses `MAX()` upsert — highest read count wins. No regression across devices. |
 | Expected UX | All clients see the same messages. Opening on any device marks session as read. No stale "unread" badges. |
 
@@ -792,17 +812,9 @@ The `RateLimitWarning` component renders a dismissible amber banner showing util
 
 **Current status: Resolved.**
 
-`GetClaudeSessionMessages` in `backend/api/claude.go` now filters non-displayable types **first**, then applies `offset`/`limit` to the already-filtered list:
+The new page-based pagination (§6) eliminates this class of issue entirely. Pages are sealed with a count of >= 100 messages after eviction (closed stream_events excluded). Each sealed page contains ~100 meaningful messages by construction. The HTTP endpoint serves pages by number, not by offset/limit into a raw list.
 
-```
-1. Build allMessages[] by iterating cachedMessages, keeping only displayable types
-2. totalCount = len(allMessages)           // displayable only
-3. messages = allMessages[offset : offset+limit]  // pagination on filtered set
-```
-
-A page of 100 always contains up to 100 displayable messages. The frontend applies a defensive filter on the HTTP response as a safety net, but the backend filtering is authoritative.
-
-**Residual risk:** None for the HTTP endpoint. The initial WebSocket burst uses a different code path (see §16.5) where the raw cache is sent — but that path is only for the most recent page and intentionally includes stream_events for mid-stream reconnection.
+**Residual risk:** None. The page sealing rules ensure every sealed page has a bounded, useful number of messages.
 
 ---
 
@@ -810,48 +822,38 @@ A page of 100 always contains up to 100 displayable messages. The frontend appli
 
 **Issue:** Stream event eviction relies on the next `assistant` message arriving in `BroadcastUIMessage`. Question: does this interact correctly with paginated history loading, or could evicted/un-evicted stream events appear in older pages?
 
-**Root cause:** Conceptual concern about the eviction lifecycle — whether the cache and HTTP endpoint could serve inconsistent views of stream events.
+**Root cause:** Conceptual concern about the eviction lifecycle — whether the raw list and HTTP endpoint could serve inconsistent views of stream events.
 
 **Current status: Resolved. No interaction issue exists.**
 
-Three layers prevent stream events from appearing in paginated history:
+The new design (§6 + §7) eliminates this interaction concern structurally:
 
-1. **Eviction on completion:** `evictStreamEvents()` runs synchronously (under `cacheMu` lock) when `BroadcastUIMessage` receives a `type: "assistant"` message. All stream events from the preceding turn are removed from `cachedMessages` before any subsequent read.
+1. **Raw list is append-only (R1).** No in-place eviction ever runs. Stream events remain in the raw list but are excluded from page views after their `assistant` message arrives (§7.3).
 
-2. **HTTP endpoint filtering:** `GetClaudeSessionMessages` applies `IsNonDisplayableMessage` to every message before pagination. Even if eviction hasn't run yet (mid-stream), stream events are excluded from HTTP responses.
+2. **Sealed pages never contain open stream_events.** The page sealing rule requires all streams to be closed before sealing. Closed stream_events are excluded from the materialized page content. Sealed pages served via HTTP are guaranteed stream-event-free.
 
-3. **CLI mode:** Stream events are ephemeral stdout output, never written to the session JSONL file. CLI-mode pagination reads from JSONL, so stream events are structurally absent.
+3. **Active stream_events live in the current (open) page.** They are served in the WS burst for mid-stream reconnection. The frontend routes them to the streaming buffer, not `rawMessages`.
 
-The only context where stream events are intentionally served is the initial WebSocket burst during active streaming (for mid-stream reconnection recovery). In that context, the frontend routes them to the streaming buffer, not `rawMessages`.
-
-**Residual risk:** None for pagination. The eviction + filtering + JSONL-absence triple-guard covers all code paths.
+**Residual risk:** None. The append-only raw list + view-layer eviction + page sealing rules make this a non-issue by construction.
 
 ---
 
 ### 16.5 Blank Screen When Recent Messages Are All Stream Events
 
-**Issue:** During a long streaming turn, the in-memory cache could contain 100+ `stream_event` messages as the most recent entries. The initial WebSocket burst delivers the last page from the raw cache. If `rawMessages` ends up empty (all received messages are stream_events routed to the streaming buffer), the `messages.length === 0` guard could block adaptive fill, leaving the user with a blank screen.
+**Issue (old design):** During a long streaming turn, the in-memory message list could contain 100+ `stream_event` messages as the most recent entries. The initial WebSocket burst delivered the last page using fragile offset arithmetic. If the client's `rawMessages` ended up empty (all received messages were stream_events routed to the streaming buffer), the `messages.length === 0` guard blocked adaptive fill, leaving the user with a blank screen.
 
-**Root cause:** The initial burst's page boundary (`historyOffset`) is computed from `displayableCount`, but the slice index is applied to the raw `cachedMessages` array. The design assumes non-displayable messages are concentrated at the tail of the cache (current turn's stream events), which is true given per-turn eviction. But if all displayable messages fall before the slice start, the burst contains only stream events.
+**Root cause (old design):** The initial burst's page boundary (`historyOffset`) was computed from displayable count but used as an index into the raw cache. This fragile arithmetic could result in a burst containing only stream_events when all displayable messages fell before the slice start.
 
-**Current status: Resolved by design, with a noted fragility.**
+**Current status: Resolved by the page-based design (§6).**
 
-The resolution relies on an invariant: **stream events from completed turns are evicted, so only the current turn's stream events exist in the cache, always at the tail.** This means:
+The new design eliminates the offset arithmetic entirely. The WS burst sends the **last 2 pages**:
 
-- `displayableCount` reflects all displayable messages in the cache (completed turns' messages)
-- `historyOffset` points to a position within the displayable messages
-- Since evicted-turn messages are contiguous before the current turn's stream events, `cachedMessages[historyOffset:]` includes the correct last page of displayable messages **plus** the tail stream events
+- The **previous sealed page** always contains ~100 displayable messages (closed stream_events excluded by the materialization layer). This page guarantees the user sees message history.
+- The **current open page** may contain active stream_events (if Claude is streaming). The frontend routes these to the streaming buffer.
 
-Example: 150 displayable messages + 200 stream_events (at tail). `historyOffset = 100`. `cachedMessages[100:]` = last 50 displayable messages + 200 stream_events. Frontend gets 50 displayable messages (correct) + streaming content.
+Since the burst always includes a sealed page with displayable content, the user never sees a blank screen — even during a long streaming turn with hundreds of stream_events in the current page.
 
-The frontend routes `stream_event` to the streaming text buffer (not `rawMessages`), so displayable messages populate the message list while streaming text renders separately.
-
-**Residual risk: The index arithmetic is fragile.** It depends on the invariant that non-displayable messages are strictly at the tail. If other non-displayable types (e.g. `rate_limit_event`, `queue-operation`) are cached via `BroadcastUIMessage` and scattered throughout the cache, the raw-cache index would diverge from the displayable-count-based offset. Currently this is mitigated by:
-- `rate_limit_event` being infrequent
-- `queue-operation` behavior depending on broadcast method (needs verification)
-- `file-history-snapshot` being persisted to JSONL but filtered at the non-displayable level
-
-A more robust approach would compute the burst by filtering the cache first (like the HTTP endpoint does), then slicing. The tradeoff is that the current approach avoids an extra filtering pass on every connect and naturally includes tail stream events for reconnection.
+**Residual risk:** None. The previous fragile index arithmetic is replaced by explicit page boundaries. The 2-page burst structurally guarantees displayable content is present.
 
 ---
 
@@ -863,25 +865,25 @@ A more robust approach would compute the burst by filtering the cache first (lik
 
 **Current status: Resolved.**
 
-The connect handler now counts **all** result messages in the full cache, not just those in the burst:
+The connect handler now counts **all** result messages in the full raw message list, not just those in the burst:
 
 ```go
 // On connect (UI mode):
-cachedMessages := session.GetCachedMessages()
-cacheResultCount := 0
-for _, msgBytes := range cachedMessages {
-    if type == "result" { cacheResultCount++ }
+rawMessages := session.GetRawMessages()
+resultCount := 0
+for _, msgBytes := range rawMessages {
+    if type == "result" { resultCount++ }
 }
-if cacheResultCount > 0 {
-    db.MarkClaudeSessionRead(sessionID, cacheResultCount)
-    deliveredResults.Store(int32(cacheResultCount))
+if resultCount > 0 {
+    db.MarkClaudeSessionRead(sessionID, resultCount)
+    deliveredResults.Store(int32(resultCount))
 }
 ```
 
-The code comment explains the rationale: *"result messages may live in older cache pages that are NOT included in the initial WebSocket burst. [...] Opening the session in the UI is sufficient to consider the historical turns 'seen'."*
+The code comment explains the rationale: *"result messages may live in older pages that are NOT included in the initial WebSocket burst. [...] Opening the session in the UI is sufficient to consider the historical turns 'seen'."*
 
 This runs before the initial burst is sent. `MarkClaudeSessionRead` uses a `MAX()` upsert, so concurrent or repeated calls never regress the read count. During the live session, each new `result` message increments `deliveredResults` and persists inline. On disconnect, `defer persistReadState()` acts as a safety net.
 
-Unread state is computed by comparing the session's live `resultCount` (incremented in `BroadcastUIMessage` on each `result`) against the DB's `last_read_message_count`. If the live count exceeds the persisted read count, the session shows as "unread". Since the connect handler writes the full cache's result count to the DB, opening a session immediately resolves any historical unread state.
+Unread state is computed by comparing the session's live `resultCount` (incremented in `BroadcastUIMessage` on each `result`) against the DB's `last_read_message_count`. If the live count exceeds the persisted read count, the session shows as "unread". Since the connect handler writes the full raw list's result count to the DB, opening a session immediately resolves any historical unread state.
 
 **Residual risk:** CLI-mode sessions use the same pattern (counting all results in `initialMessages` on connect). The `MAX()` upsert prevents race conditions between multiple clients. No residual risk identified.
