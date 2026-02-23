@@ -1,5 +1,5 @@
 ---
-title: "Claude Session Messages — Full Review"
+title: "Claude Session Messages"
 ---
 
 > **Scope**: Backend → Frontend review of the entire session messages pipeline, covering the raw message list, page-based pagination, WebSocket delivery, stream event lifecycle, and rendering. Written 2026-02-23 against the current codebase; updated 2026-02-24 with the page-based pagination design, append-only raw message model, dropped-at-ingest types, and CLI mode removal. Where the existing [`websocket-protocol.md`](./websocket-protocol) describes an older polling-based design, this document reflects the target implementation.

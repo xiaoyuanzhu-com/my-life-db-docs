@@ -16,6 +16,18 @@ export default defineConfig({
 					autogenerate: { directory: 'get-started' },
 				},
 				{
+					label: 'Features',
+					autogenerate: { directory: 'features' },
+				},
+				{
+					label: 'Product Design',
+					autogenerate: { directory: 'product-design' },
+				},
+				{
+					label: 'Tech Design',
+					autogenerate: { directory: 'tech-design' },
+				},
+				{
 					label: 'Internal',
 					items: [
 						{
@@ -42,11 +54,7 @@ export default defineConfig({
 							label: 'Apple Client',
 							autogenerate: { directory: 'internal/apple-client' },
 						},
-						{
-							label: 'Product Design',
-							autogenerate: { directory: 'internal/product-design' },
-						},
-						{
+	{
 							label: 'Design',
 							autogenerate: { directory: 'internal/design' },
 						},

@@ -1,5 +1,5 @@
 ---
-title: "Inbox Page — Product Requirements"
+title: "Inbox"
 ---
 
 **Version:** 1.0
