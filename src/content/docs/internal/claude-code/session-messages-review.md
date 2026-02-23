@@ -426,6 +426,10 @@ Order is guaranteed because pages partition the raw list sequentially (page 0 < 
 
 The client tracks `lowestLoadedPage` (to know which page to fetch next on scroll-up) and `totalPages` (from `session_info`). UUID deduplication handles any overlap from reconnects or page sealing during live streaming.
 
+**Scroll-up loads are serialized:** Only one page load is in flight at a time (`isLoadingHistory` flag). When page N arrives and the user is still scrolled near the top, the next load (page N-1) is triggered. This guarantees pages arrive in descending order — no out-of-order prepending from concurrent requests racing. The per-page payload is small (~100 messages), so serialization adds negligible delay.
+
+**Why a flat array, not a sparse structure:** React with `key={uuid}` on each message component handles prepending efficiently — reconciliation matches existing elements by key and only mounts new ones. Pre-allocating placeholder slots (sparse array indexed by position) isn't feasible because page sizes are variable, so exact positions aren't known until each page loads. A flat array is simpler and the render cost is proportional to new messages, not total list size.
+
 ### 6.7 Performance Characteristics
 
 | Scenario | Messages transferred on connect |
@@ -521,19 +525,55 @@ Since the raw list retains all stream_events for the session's lifetime, a sessi
 
 ## 8. Session State Machine
 
-The backend computes a derived `sessionState` from in-memory session properties:
+### 8.1 Derivation
+
+The backend computes a derived `sessionState` from in-memory session properties. Priority is top-down — first match wins:
 
 ```
 if archived → "archived"
 else if pendingPermissionCount > 0 → "unread" (permission waiting)
 else if isProcessing → "working"
-else if unreadResultCount > 0 → "unread"
+else if unreadResultCount > 0 → "unread" (new results)
 else → "idle"
 ```
 
-State is broadcast via SSE (not WebSocket) to drive the session list UI and Apple client badge counts. Read state (`readResultCount`) is persisted to SQLite via `MAX()` upsert — ensuring state never regresses across device switches.
+Where `unreadResultCount = resultCount - lastReadResultCount`. Both are integers: `resultCount` is incremented in memory on each `result` message; `lastReadResultCount` is persisted in SQLite.
 
-### 8.1 Read Tracking with Pagination
+### 8.2 States
+
+| State | Condition | Semantics | Session List UX | How it resolves |
+|-------|-----------|-----------|-----------------|-----------------|
+| **archived** | User archived the session | Inactive, hidden from default view | Shown only in "archived" filter | User unarchives manually |
+| **unread** (permission) | `pendingPermissionCount > 0` | Claude is blocked — needs permission to use a tool | Permission badge | User approves or denies the request |
+| **working** | `isProcessing = true` | Claude is actively generating or executing tools | Activity indicator (spinner/pulse) | `result` message arrives → isProcessing = false |
+| **unread** (result) | `unreadResultCount > 0` | Claude completed work since user last opened | Unread dot/badge | User opens session (connect handler marks all as read) |
+| **idle** | None of the above | Session is quiet, nothing pending | Default appearance, no indicators | — (terminal state until next activity) |
+
+### 8.3 Transitions
+
+```
+User sends message / system init
+  → isProcessing = true → "working"
+
+Claude streams → assistant → result
+  → isProcessing = false, resultCount++
+  → If client connected: deliveredResults++ → stays "idle"
+  → If no client: unreadResultCount > 0 → "unread (result)"
+
+Client connects (WS subscribe)
+  → Mark ALL results as read (§8.4) → unreadResultCount = 0 → "idle"
+
+control_request arrives
+  → pendingPermissionCount++ → "unread (permission)"
+
+control_response sent
+  → pendingPermissionCount-- → back to "working" or "idle"
+
+User archives / unarchives
+  → "archived" ↔ previous state
+```
+
+### 8.4 Read Tracking with Pagination
 
 With page-based pagination (§6), the client receives only the last 2 pages on connect — not the full history. Read tracking must still work correctly.
 
@@ -542,6 +582,10 @@ With page-based pagination (§6), the client receives only the last 2 pages on c
 **During live session:** Each new `result` message increments a `deliveredResults` counter. On disconnect, this count is persisted to DB as a safety net.
 
 **Implication:** `unreadResultCount > 0` only triggers when new results arrive **after** the user's last connect. Results in older pages — even if the user never scrolled up to load them — are marked as read when the session is opened. There is no stale "unread" state from historical results.
+
+### 8.5 Broadcast
+
+State is broadcast via SSE (not WebSocket) to drive the session list UI and Apple client badge counts. Read state is persisted to SQLite via `MAX()` upsert — ensuring state never regresses across device switches or concurrent clients.
 
 ---
 
