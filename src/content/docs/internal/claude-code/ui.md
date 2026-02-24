@@ -1367,7 +1367,7 @@ These are top-level session events that are rendered as simple status indicators
 | `system.subtype: microcompact_boundary` | "Context microcompacted" + collapsible tool list | Marks where specific tool outputs were compacted, shows which tools and tokens saved |
 | `system.subtype: init` | System init block | Shows session initialization with tools, model, MCP servers |
 | `system.subtype: turn_duration` | "Turn completed in Xm Ys" | Turn duration telemetry showing how long a turn took |
-| `system.subtype: hook_started` | "Hook {status}: {hook_name}" + collapsible output | Hook execution (paired with hook_response via hookResponseMap) |
+| `system.subtype: hook_started` | **Skipped** (filtered in session-messages.tsx) | Hooks are infrastructure plumbing; side effects (e.g., additional_context) appear as system-reminders |
 | `system.subtype: task_notification` | Summary text with status dot + optional usage stats | Background task completed/failed notification. When `usage` stats are present (agent tasks), shows duration, tool uses, and token count inline. |
 | `system.subtype: api_error` | "API error: {description}" + retry line | Claude Code failed to call the Anthropic API. Shows human-readable error + retry progress ("Retrying (N/M) in X.Xs"). Two variants: HTTP errors (`error.status`) and network errors (`error.cause.code`). Red dot. |
 | `user.isCompactSummary: true` | "Session continued" + collapsible summary | User message containing the compacted conversation summary |
@@ -1397,7 +1397,8 @@ Some message types are intentionally **not rendered** in the chat interface as s
 | Skipped XML tags only | User messages containing ONLY skipped XML tags (no other content) |
 | `<task-notification>` prefix | User messages starting with `<task-notification>` XML — system-injected Task sub-agent completion notifications, redundant with `tool_result`. Skipped via prefix check (has trailing text outside XML). |
 | `type: "progress"` | Progress messages are rendered inside their parent tools, not as standalone messages |
-| `system.subtype: hook_response` | Rendered inside hook_started via hookResponseMap, not as standalone message |
+| `system.subtype: hook_started` | Hooks are infrastructure plumbing; side effects (e.g., additional_context injection) appear as system-reminder messages. No user-facing value. |
+| `system.subtype: hook_response` | Same as hook_started — skipped. Previously paired with hook_started via hookResponseMap, but both are now fully filtered. |
 | `system.subtype: status` | Rendered as **transient indicator** at end of message list when non-null (e.g., "Compacting..."). Disappears when status is null. |
 | `type: "control_request"` | Permission protocol message - triggers permission modal, not a chat message |
 | `type: "control_response"` | Permission protocol message - sent from UI to CLI via stdin, not displayed |

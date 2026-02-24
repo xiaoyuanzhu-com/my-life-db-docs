@@ -1686,11 +1686,7 @@ hook_started (hook_id: X) → hook_response (hook_id: X)
 
 The `hook_id` field links `hook_started` and `hook_response` messages as a pair.
 
-**Rendering:** `hook_response` is NOT rendered as a standalone message. It is paired with `hook_started` via `hookResponseMap` and rendered together as a single entry (similar to how tool_use and tool_result are paired). The combined rendering shows:
-- Running state (orange): When only `hook_started` exists
-- Completed state (green): When `hook_response` with `outcome: "success"` is paired
-- Failed state (red): When `hook_response` with `outcome: "error"` is paired
-- Collapsible output: When `hook_response` contains stdout/output
+**Rendering:** Both `hook_started` and `hook_response` are **fully skipped** (filtered in `session-messages.tsx`). Hooks are infrastructure plumbing — their side effects (e.g., `additional_context` injection) already appear as `system-reminder` messages in the conversation. Rendering the raw hook output added noise without information value.
 
 **5g. Status (Ephemeral Session Status)**
 
