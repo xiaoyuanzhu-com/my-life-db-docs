@@ -322,7 +322,8 @@ pageBreaks:   [103, 210]
 | Property | Sealed pages | Current (last) page |
 |----------|-------------|---------------------|
 | Content changes? | Never — immutable once sealed | Grows as new messages append |
-| Contains stream_events? | No — evicted before sealing | May contain active stream_events |
+| Contains closed stream_events? | No — excluded at materialization | No — excluded at materialization (same filter) |
+| Contains active stream_events? | No — page can't seal with open stream | Yes — needed for mid-stream reconnect |
 
 ### 6.2 Page Sealing Rules
 
@@ -406,6 +407,8 @@ On each append:
 
 **Sealed page serving:** Materialized page content (raw messages minus closed stream_events) can be computed once at seal time and stored alongside the break index. This avoids re-filtering on every HTTP request for sealed pages.
 
+**Open page serving:** The open page also excludes closed stream_events at materialization time — the same filter applies to all pages. The difference is that the open page may additionally contain **active** stream_events (no following `assistant` yet), which are kept for mid-stream reconnection recovery. The filter scans backward from the end of the page to find the trailing run of stream_events with no `assistant` after them — those are active and preserved. All other stream_events are closed and excluded.
+
 ### 6.6 Client-Side Reconstruction
 
 Pages are a backend delivery mechanism — the client never sees page boundaries. It maintains a single flat `rawMessages` array in the same order as the backend's raw list:
@@ -483,11 +486,21 @@ Raw list (append-only, never mutated):
   [..., stream_event, stream_event, ..., stream_event, assistant, result, ...]
                                                           ↑ closure signal
 
-Page materialization (view layer):
+Page materialization (view layer — applies to ALL pages, sealed and open):
   → When building page contents for serving (WS burst or HTTP),
-    skip stream_events that have a corresponding assistant message
+    skip stream_events that have a corresponding assistant message after them
   → Stream_events with NO following assistant (active streaming) are KEPT —
     they're needed for mid-stream reconnection
+  → This filter is the same for sealed and open pages. The only difference
+    is that sealed pages never have active stream_events (seal requires
+    all streams closed), so the filter excludes ALL stream_events from
+    sealed pages.
+
+Open page example (multiple streaming cycles):
+  Raw:    [se, se, assistant₁, result₁, user₂, se, se, assistant₂, result₂, se, se]
+                   ↑ closes first run              ↑ closes second run    ↑ active (no assistant yet)
+  Served: [assistant₁, result₁, user₂, assistant₂, result₂, se, se]
+           closed stream_events excluded ──────────────────  active kept
 
 Page seal check (after each append):
   → Count messages in current page, excluding closed stream_events
@@ -745,7 +758,7 @@ The session messages system is **well-architected** for its requirements. The ap
 **Things that are working well:**
 - Append-only raw message list as single source of truth (R1, D1)
 - UUID-based deduplication at every layer (raw list, page serving, frontend)
-- Stream event lifecycle (kept in raw list for reconnection → excluded from sealed pages at materialization)
+- Stream event lifecycle (kept in raw list for reconnection → excluded from all materialized pages when closed)
 - Page-based pagination with immutable sealed pages (stable boundaries)
 - Last-2-pages burst keeping initial connect O(2 pages) not O(session)
 - Large content stripping at JSONL parse time keeping payloads small
@@ -806,7 +819,7 @@ Common scenarios and the expected behavior at each layer. Use these to verify co
 | Layer | Behavior |
 |-------|----------|
 | Backend | Stream events accumulate in raw list (R1 — append-only). Current page stays open (stream not closed, seal blocked). |
-| WS burst (if reconnect) | Last 2 pages — previous sealed page (no stream_events) + current open page (includes active stream_events). |
+| WS burst (if reconnect) | Last 2 pages — previous sealed page (no stream_events) + current open page (closed stream_events excluded, active stream_events included for reconnect recovery). |
 | Frontend | Stream events routed to buffer (40ms flush). Displayable messages populate `rawMessages`. |
 | Expected UX | Message list shows completed turns. Streaming text renders smoothly. No blank screen — previous sealed page guarantees displayable messages are present. |
 
@@ -866,7 +879,7 @@ Common scenarios and the expected behavior at each layer. Use these to verify co
 
 ## 16. Historical Issues
 
-Six issues encountered during development and how the current design addresses each one.
+Seven issues encountered during development and how the current design addresses each one.
 
 ---
 
@@ -937,7 +950,7 @@ The new design (§6 + §7) eliminates this interaction concern structurally:
 
 2. **Sealed pages never contain open stream_events.** The page sealing rule requires all streams to be closed before sealing. Closed stream_events are excluded from the materialized page content. Sealed pages served via HTTP are guaranteed stream-event-free.
 
-3. **Active stream_events live in the current (open) page.** They are served in the WS burst for mid-stream reconnection. The frontend routes them to the streaming buffer, not `rawMessages`.
+3. **The open page applies the same eviction filter as sealed pages.** Closed stream_events (those with a following `assistant`) are excluded from the materialized view. Only active stream_events (trailing run with no `assistant` yet) are served in the WS burst for mid-stream reconnection. The frontend routes them to the streaming buffer, not `rawMessages`.
 
 **Residual risk:** None. The append-only raw list + view-layer eviction + page sealing rules make this a non-issue by construction.
 
@@ -992,3 +1005,26 @@ This runs before the initial burst is sent. `MarkClaudeSessionRead` uses a `MAX(
 Unread state is computed by comparing the session's live `resultCount` (incremented in `BroadcastUIMessage` on each `result`) against the DB's `last_read_message_count`. If the live count exceeds the persisted read count, the session shows as "unread". Since the connect handler writes the full raw list's result count to the DB, opening a session immediately resolves any historical unread state.
 
 **Residual risk:** The `MAX()` upsert prevents race conditions between multiple clients. No residual risk identified.
+
+---
+
+### 16.7 Closed Stream Events Leaked on Open Page
+
+**Issue:** When a session was idle (Claude not streaming), the open page's materialized view still included closed stream_events from completed turns. Clients received redundant stream_event messages that should have been evicted.
+
+**Root cause:** `GetPage` and `GetPageRange` used a simplified eviction strategy: filter ALL stream_events from sealed pages, include EVERYTHING on the open page. The assumption was that the open page only contains active stream_events — but this is wrong. The open page can have **multiple completed streaming cycles** (stream → assistant → result → user → stream → assistant → ...) before it seals. Each `assistant` closes its preceding stream_events, but the code path for the open page copied the entire raw slice without filtering.
+
+```
+Open page raw list (idle session — no active stream):
+  [se, se, assistant₁, result₁, user₂, se, se, assistant₂, result₂]
+                ↑ closed                         ↑ closed
+
+Old behavior (bug):  served ALL 9 messages including 4 closed stream_events
+Correct behavior:    served 5 messages (closed stream_events excluded)
+```
+
+**Current status: Resolved.**
+
+The materialization functions (`GetPage`, `GetPageRange`) now apply the same eviction filter to all pages — sealed and open. The filter scans backward from the end of the page slice to find the boundary between active and closed stream_events: any trailing run of stream_events with no `assistant` after them is active (kept for mid-stream reconnection); all other stream_events are closed (excluded). When the session is idle (`hasOpenStream = false`), all stream_events on the open page are closed and excluded.
+
+**Residual risk:** None. The eviction filter is now uniform across all pages, and the active/closed distinction is determined structurally (is there an `assistant` after this stream_event?).
