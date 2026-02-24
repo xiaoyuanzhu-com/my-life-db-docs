@@ -824,7 +824,9 @@ flowchart TD
 | Grep/Glob | object | `mode`, `filenames` |
 | WebFetch | object | `bytes`, `code`, `result`, `durationMs`, `url` |
 | WebSearch | object | `query`, `results`, `durationSeconds` |
-| Task | object | `status`, `prompt` |
+| Task (foreground) | object | `status`, `prompt`, `agentId`, `content`, `totalDurationMs`, `totalTokens`, `totalToolUseCount` |
+| Task (background) | object | `isAsync: true`, `status: "async_launched"`, `agentId`, `description`, `outputFile` |
+| TaskOutput | object | `retrieval_status`, `task.status`, `task.output`, `task.description`, `task.prompt` |
 | AskUserQuestion | object | `answers` (user selections) |
 
 **Important**: The `toolUseResult` field type varies:
@@ -1018,6 +1020,105 @@ When a Task tool spawns a subagent, a `task_started` system message is emitted t
 | `session_id` | string | Session UUID |
 
 **Rendering:** Skipped — filtered out in `session-messages.tsx`. The `task_started` message is redundant with the Task `tool_use` block, which already displays the same `description` in its header. Note: `tool_use_id` provides a linking field back to the parent tool block (similar to `parentToolUseID` on `agent_progress`), but since the message is still fully redundant with the tool block header, it remains skipped.
+
+#### Background Async Task Data Flow ⭐ SPECIAL PATTERN
+
+When a Task is launched with `run_in_background: true`, the data flow differs significantly from foreground (synchronous) Tasks:
+
+```mermaid
+flowchart TD
+    A["Assistant: tool_use Task\n(run_in_background: true)"]
+    A --> B["User: tool_result\n(isAsync: true, agentId, outputFile)"]
+    B --> C["Assistant: tool_use TaskOutput\n(task_id = agentId)"]
+    C --> D["User: tool_result for TaskOutput\n(retrieval_status, task.output, task.status)"]
+```
+
+**Foreground vs Background Comparison:**
+
+| Aspect | Foreground Task | Background (Async) Task |
+|--------|----------------|------------------------|
+| `run_in_background` | `false` (default) | `true` |
+| Task tool result | Final agent output (content array) | Launch metadata (`isAsync: true`, `agentId`) |
+| Output retrieval | Included in Task tool_result | Separate `TaskOutput` tool call |
+| Progress messages | 0 or more `agent_progress` | Usually none (runs detached) |
+| Subagent messages | Linked via `parent_tool_use_id` | Usually not available |
+
+**Background Task Launch Result (Task tool_result):**
+
+```json
+{
+  "toolUseResult": {
+    "isAsync": true,
+    "status": "async_launched",
+    "agentId": "aa0ba5912ea34ab1d",
+    "description": "Search for authentication patterns",
+    "outputFile": "/home/user/.claude/todos/aa0ba5912ea34ab1d.json"
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `isAsync` | boolean | Always `true` for background launches |
+| `status` | string | `"async_launched"` |
+| `agentId` | string | Unique agent identifier (variable length hex) |
+| `description` | string | Task description from input params |
+| `outputFile` | string | Path to agent's output file on disk |
+
+**TaskOutput Tool (Retrieval):**
+
+The assistant later calls `TaskOutput` to check on/retrieve the background agent's result:
+
+```json
+{
+  "type": "tool_use",
+  "name": "TaskOutput",
+  "input": {
+    "task_id": "aa0ba5912ea34ab1d",
+    "block": true,
+    "timeout": 30000
+  }
+}
+```
+
+**TaskOutput tool_result:**
+
+```json
+{
+  "toolUseResult": {
+    "retrieval_status": "ready",
+    "task": {
+      "status": "completed",
+      "description": "Search for authentication patterns",
+      "prompt": "Search the codebase for...",
+      "output": "## Authentication Patterns\n\nFound the following...",
+      "result": "## Authentication Patterns\n...",
+      "totalDurationMs": 45000,
+      "totalTokens": 52000
+    }
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `retrieval_status` | string | `"ready"` or `"not_ready"` |
+| `task.status` | string | `"completed"`, `"running"`, or `"error"` |
+| `task.description` | string | Task description |
+| `task.prompt` | string | Original prompt sent to the subagent |
+| `task.output` | string | Agent's final output (markdown) |
+| `task.result` | string | Alternative field for agent output |
+| `task.totalDurationMs` | number | Total execution time |
+| `task.totalTokens` | number | Total tokens used |
+
+**Linking Chain (Task → TaskOutput):**
+
+The key linking field is `agentId`:
+1. Task tool_result contains `agentId` (e.g., `"aa0ba5912ea34ab1d"`)
+2. TaskOutput tool_use input contains `task_id` with the **same value**
+3. TaskOutput tool_result contains the actual agent output
+
+This chain allows the UI to merge the TaskOutput result back into the parent Task block (see ui.md for rendering details).
 
 ---
 

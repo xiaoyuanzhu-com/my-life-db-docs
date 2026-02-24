@@ -1253,6 +1253,44 @@ const subagentMessagesMap = buildSubagentMessagesMap(messages)
 | `agent_progress.data.normalizedMessages` | Live streaming | Real-time progress |
 | Messages with `parent_tool_use_id` | Always (persisted) | Historical sessions, full conversation |
 
+**Background Async Tasks:**
+
+When `run_in_background: true`, the Task tool returns immediately with launch metadata (`isAsync: true`), and the actual output arrives later via a separate `TaskOutput` tool call. See [data-models.md "Background Async Task Data Flow"](./data-models.md#background-async-task-data-flow--special-pattern) for the complete message structure.
+
+**Rendering behavior:**
+
+The UI **merges** the TaskOutput result back into the parent Task block so background Tasks render identically to foreground Tasks. The standalone `TaskOutput` tool_use block is **absorbed** (hidden from rendering).
+
+```
+Before merge (async pending):
+● Task "Search for auth patterns" (general-purpose) [background]
+└ Agent launched in background
+
+After merge (TaskOutput result available):
+● Task "Search for auth patterns" (general-purpose) [background]
+  ▸ Prompt
+  ▸ Output                      ← merged from TaskOutput result
+```
+
+**Implementation (`session-messages.tsx`):**
+
+1. `buildAsyncTaskOutputMap()` links async Task launches to their TaskOutput results:
+   - Scans for Task tool_results with `isAsync: true` → extracts `agentId` → maps to Task `tool_use.id`
+   - Scans for TaskOutput tool_use blocks → matches `task_id` to `agentId` → looks up TaskOutput result
+   - Returns `asyncTaskOutputMap` (Task tool_use.id → TaskOutput result) and `absorbedToolUseIds` (set of TaskOutput tool_use IDs to hide)
+
+2. `TaskToolView` uses `effectiveResult` pattern:
+   - If `asyncTaskOutputMap` has a result for this Task, overlay it as the effective result
+   - All downstream extraction logic (prompt, output, markdown rendering) works uniformly for both sync and async Tasks
+
+3. `MessageBlock` filters absorbed TaskOutput blocks from rendering using `absorbedToolUseIds`
+
+**TaskOutput Tool — Absorbed into Task Block:**
+
+The `TaskOutput` tool (`name: "TaskOutput"`) is used by the assistant to check on / retrieve results from background async agents. Rather than rendering as a standalone tool block, its result is **merged into the parent Task block** (see above). The `TaskOutput` tool_use block itself is hidden from the message stream.
+
+When the linking chain cannot be established (e.g., malformed data), the `TaskOutput` falls through to `GenericToolView` as a safety net.
+
 </details>
 
 <details>
