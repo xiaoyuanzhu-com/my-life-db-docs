@@ -546,21 +546,27 @@ The backend computes a derived `sessionState` from in-memory session properties.
 
 ```
 if archived → "archived"
-else if pendingPermissionCount > 0 → "unread" (permission waiting)
-else if isProcessing → "working"
+else if isProcessing && !hasPendingPermission → "working"
+else if isProcessing && hasUnseenPermission → "unread" (unseen permission)
+else if isProcessing && hasPendingPermission → "idle" (permission seen, waiting)
 else if unreadResultCount > 0 → "unread" (new results)
 else → "idle"
 ```
 
-Where `unreadResultCount = resultCount - lastReadResultCount`. Both are integers: `resultCount` is incremented in memory on each `result` message; `lastReadResultCount` is persisted in SQLite.
+Where:
+- `unreadResultCount = resultCount - lastReadResultCount`. Both are integers: `resultCount` is incremented in memory on each `result` message; `lastReadResultCount` is persisted in SQLite.
+- `hasUnseenPermission = pendingPermissionCount > seenPermissionCount`. Both are in-memory integers on the Session: `pendingPermissionCount` is incremented/decremented by `control_request`/`control_response`; `seenPermissionCount` is set to `pendingPermissionCount` when the user opens the session (WebSocket connect).
+
+Both results and permissions use the same "seen" pattern: opening the session marks all current items as seen; new items arriving after the user closes the session make it "unread" again.
 
 ### 8.2 States
 
 | State | Condition | Semantics | Session List UX | How it resolves |
 |-------|-----------|-----------|-----------------|-----------------|
 | **archived** | User archived the session | Inactive, hidden from default view | Shown only in "archived" filter | User unarchives manually |
-| **unread** (permission) | `pendingPermissionCount > 0` | Claude is blocked — needs permission to use a tool | Permission badge | User approves or denies the request |
-| **working** | `isProcessing = true` | Claude is actively generating or executing tools | Activity indicator (spinner/pulse) | `result` message arrives → isProcessing = false |
+| **working** | `isProcessing && !hasPendingPermission` | Claude is actively generating or executing tools | Activity indicator (spinner/pulse) | `result` message arrives → isProcessing = false |
+| **unread** (permission) | `isProcessing && hasUnseenPermission` | Claude is blocked on a permission the user hasn't seen | Permission badge | User opens session (marks permissions as seen) or approves/denies |
+| **idle** (permission seen) | `isProcessing && hasPendingPermission && !hasUnseenPermission` | Claude is blocked, but user has seen the permission dialog | Default appearance | User returns and approves/denies the request |
 | **unread** (result) | `unreadResultCount > 0` | Claude completed work since user last opened | Unread dot/badge | User opens session (connect handler marks all as read) |
 | **idle** | None of the above | Session is quiet, nothing pending | Default appearance, no indicators | — (terminal state until next activity) |
 
@@ -576,19 +582,28 @@ Claude streams → assistant → result
   → If no client: unreadResultCount > 0 → "unread (result)"
 
 Client connects (WS subscribe)
-  → Mark ALL results as read (§8.4) → unreadResultCount = 0 → "idle"
+  → Mark ALL results as read (§8.4) → unreadResultCount = 0
+  → Mark ALL pending permissions as seen (§8.4) → hasUnseenPermission = false
+  → "idle"
 
 control_request arrives
-  → pendingPermissionCount++ → "unread (permission)"
+  → pendingPermissionCount++ (seenPermissionCount unchanged)
+  → If user not viewing: pendingPermissionCount > seenPermissionCount → "unread (permission)"
+  → If user viewing (WS connected): seenPermissionCount catches up on next connect → stays "idle"
 
 control_response sent
-  → pendingPermissionCount-- → back to "working" or "idle"
+  → pendingPermissionCount-- and seenPermissionCount-- (clamped to 0)
+  → back to "working" or "idle"
 
 User archives / unarchives
   → "archived" ↔ previous state
 ```
 
-### 8.4 Read Tracking with Pagination
+### 8.4 Read/Seen Tracking
+
+Both results and permissions use the same "seen on open" pattern — opening the session marks all current items as seen; new items arriving after the user closes make it "unread" again.
+
+#### 8.4.1 Result Read Tracking (persisted to DB)
 
 With page-based pagination (§6), the client receives only the last 2 pages on connect — not the full history. Read tracking must still work correctly.
 
@@ -597,6 +612,18 @@ With page-based pagination (§6), the client receives only the last 2 pages on c
 **During live session:** Each new `result` message increments a `deliveredResults` counter. On disconnect, this count is persisted to DB as a safety net.
 
 **Implication:** `unreadResultCount > 0` only triggers when new results arrive **after** the user's last connect. Results in older pages — even if the user never scrolled up to load them — are marked as read when the session is opened. There is no stale "unread" state from historical results.
+
+#### 8.4.2 Permission Seen Tracking (in-memory only)
+
+Permissions use the same counter-based pattern as results, but in-memory only — permissions themselves are ephemeral (`control_request`/`control_response` are not reloaded from JSONL).
+
+**On connect:** The connect handler calls `session.MarkPermissionsSeen()`, which sets `seenPermissionCount = pendingPermissionCount`. All currently pending permissions are now "seen".
+
+**New permission arrives:** `pendingPermissionCount` increments via `BroadcastUIMessage` on `control_request`. Since `seenPermissionCount` stays unchanged, `pendingPermissionCount > seenPermissionCount` → session is "unread".
+
+**Permission resolved:** Both `pendingPermissionCount` and `seenPermissionCount` decrement on `control_response` (clamped to 0, seen never exceeds pending). This prevents resolving a seen permission from creating a false "unseen" state.
+
+**Why in-memory only?** Permissions are ephemeral — `control_request` and `control_response` are filtered out when loading from JSONL (§5.4). On server restart, both counters reset to 0, which is correct: there are no pending permissions to track.
 
 ### 8.5 Session List Updates (SSE)
 
@@ -669,8 +696,8 @@ Every user-visible session list change triggers an SSE event → refetch → re-
 | Session title updates | `updated` |
 | Spinner / working indicator appears | `updated` (isProcessing=true) |
 | Spinner stops | `updated` (result arrives) |
-| Permission badge appears | `updated` (pendingPermission++) |
-| Permission badge clears | `updated` (pendingPermission--) |
+| Unread dot appears (unseen permission) | `updated` (pendingPermission > seenPermission) |
+| Unread dot clears (user opened session, saw permission) | `read` (MarkPermissionsSeen on WS connect) |
 | Unread dot appears (completed turn, user not viewing) | `updated` (resultCount > lastRead) |
 | Unread dot clears (on all tabs/devices) | `read` |
 | Session disappears from active list (archived) | `updated` |
@@ -936,10 +963,14 @@ Common scenarios and the expected behavior at each layer. Use these to verify co
 
 | Layer | Behavior |
 |-------|----------|
-| Backend | `control_request` appended to raw list via `BroadcastUIMessage` (survives reconnect). |
+| Backend | `control_request` appended to raw list via `BroadcastUIMessage` (survives reconnect). `pendingPermissionCount` incremented. |
+| Session list | `pendingPermissionCount > seenPermissionCount` → session shows as "unread". |
 | Frontend | `handleMessage` routes to `permissions.handleControlRequest`. Renders permission UI inline. |
-| User action | Approve/deny → `control_response` sent via WS. Backend forwards to Claude stdin. |
-| Expected UX | Permission prompt appears inline in the message flow. Persists across reconnects until resolved. |
+| User opens session | WS connect → `MarkPermissionsSeen()` → session becomes "idle" (user has seen the permission). |
+| User closes without acting | Session stays "idle" — permission still pending but user has been notified. |
+| New permission arrives after close | `pendingPermissionCount` increments again → exceeds `seenPermissionCount` → back to "unread". |
+| User action | Approve/deny → `control_response` sent via WS. Backend forwards to Claude stdin. Both `pendingPermissionCount` and `seenPermissionCount` decremented. |
+| Expected UX | Permission prompt appears inline in the message flow. Persists across reconnects until resolved. Opening the session clears the unread indicator even if the user doesn't act on the permission. |
 
 ### 15.10 New Message Type from Claude Code Update
 
@@ -963,9 +994,11 @@ Common scenarios and the expected behavior at each layer. Use these to verify co
 |---------|-------|-----------------|
 | Claude starts processing | `working` | `isProcessing` flag set on session |
 | `result` message arrives, no client viewing | `unread` | `resultCount` exceeds `lastReadResultCount` in DB |
-| Client connects to session | `idle` | Connect handler writes full `resultCount` to DB via `MarkClaudeSessionRead` |
-| `control_request` arrives | `unread` | `pendingPermissionCount > 0` |
-| User responds to permission | `working` or `idle` | Permission resolved, count decremented |
+| Client connects to session | `idle` | Connect handler writes full `resultCount` to DB + calls `MarkPermissionsSeen()` |
+| `control_request` arrives, user not viewing | `unread` | `pendingPermissionCount > seenPermissionCount` |
+| `control_request` arrives, user already saw previous permissions | `unread` | New permission pushes `pendingPermissionCount` above `seenPermissionCount` |
+| User opens session with pending permission | `idle` | `MarkPermissionsSeen()` sets `seenPermissionCount = pendingPermissionCount` |
+| User responds to permission | `working` or `idle` | Both `pendingPermissionCount` and `seenPermissionCount` decremented |
 
 ---
 
