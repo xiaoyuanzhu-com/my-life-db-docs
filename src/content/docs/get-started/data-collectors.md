@@ -68,7 +68,7 @@ Claude, ChatGPT conversation sessions.
 ## Health
 
 ### Activity
-Steps, distance, flights, active energy.
+Steps, distance, flights, active energy, basal energy.
 
 | Source | Description | Platform | Status |
 |--------|-------------|----------|--------|
@@ -76,11 +76,12 @@ Steps, distance, flights, active energy.
 | Distance | Walking + running distance | iPhone, Watch | Available |
 | Flights Climbed | Floors ascended | iPhone, Watch | Available |
 | Active Energy | Calories burned through activity | iPhone, Watch | Available |
+| Basal Energy | Calories burned at rest | iPhone, Watch | Available |
 | Exercise Minutes | Time spent exercising | iPhone, Watch | Available |
 | Stand Hours | Hours with standing activity | Watch | Available |
 
 ### Heart & Vitals
-Heart rate, HRV, blood oxygen, VO2 max.
+Heart rate, HRV, blood oxygen, blood pressure, rhythm events.
 
 | Source | Description | Platform | Status |
 |--------|-------------|----------|--------|
@@ -89,6 +90,12 @@ Heart rate, HRV, blood oxygen, VO2 max.
 | Blood Oxygen | SpO2 saturation level | Watch | Available |
 | Respiratory Rate | Breaths per minute during sleep | Watch | Available |
 | VO2 Max | Cardio fitness level | Watch | Available |
+| Blood Pressure | Systolic & diastolic (manual entry or cuff) | iPhone | Available |
+| Blood Glucose | Blood sugar level (manual entry or CGM) | iPhone | Available |
+| High Heart Rate Events | Notifications when HR exceeds threshold | Watch | Available |
+| Low Heart Rate Events | Notifications when HR drops below threshold | Watch | Available |
+| Irregular Rhythm | Irregular heartbeat detections | Watch | Available |
+| AFib Burden | % of time in atrial fibrillation | Watch | Available |
 
 ### Sleep
 Duration, stages, bedtime patterns.
@@ -101,12 +108,30 @@ Duration, stages, bedtime patterns.
 | Sleep Consistency | Schedule regularity score | iPhone | Available |
 
 ### Body Metrics
-Weight, body composition, walking steadiness.
+Weight, height, body composition, temperature.
 
 | Source | Description | Platform | Status |
 |--------|-------------|----------|--------|
 | Body Weight | Weight measurements | iPhone | Available |
-| Walking Steadiness | Fall risk assessment | iPhone | Available |
+| Height | Body height | iPhone | Available |
+| Body Fat % | Body fat percentage | iPhone | Available |
+| Lean Body Mass | Muscle + bone mass | iPhone | Available |
+| BMI | Body mass index | iPhone | Available |
+| Waist Circumference | Waist measurement | iPhone | Available |
+| Wrist Temperature | Overnight skin temperature from Apple Watch | Watch | Available |
+
+### Mobility
+Walking gait analysis, stair speed, steadiness.
+
+| Source | Description | Platform | Status |
+|--------|-------------|----------|--------|
+| Walking Steadiness | Fall risk assessment | Watch | Available |
+| Walking Speed | Average walking speed | Watch | Available |
+| Step Length | Average step length while walking | Watch | Available |
+| Walking Asymmetry | Left/right step time difference | Watch | Available |
+| Double Support Time | Time both feet are on the ground | Watch | Available |
+| Stair Ascent Speed | Speed going up stairs | Watch | Available |
+| Stair Descent Speed | Speed going down stairs | Watch | Available |
 
 ### Mindfulness
 Meditation, mood, gratitude, journaling.
@@ -126,9 +151,18 @@ Exercise sessions, routes, running, swimming, cycling.
 |--------|-------------|----------|--------|
 | Workouts | All workout types with duration and calories | iPhone, Watch | Available |
 | Workout Routes | GPS tracks for outdoor workouts | iPhone, Watch | Available |
-| Running Metrics | Pace, cadence, stride length, power | Watch | Available |
+| Running Metrics | Pace, stride length, vertical oscillation, power, ground contact time | Watch | Available |
 | Swimming | Laps, strokes, distance, SWOLF | Watch | Available |
 | Cycling | Distance, speed, power | iPhone, Watch | Available |
+
+### Audio & Environment
+Noise exposure, headphone levels, UV radiation.
+
+| Source | Description | Platform | Status |
+|--------|-------------|----------|--------|
+| Ambient Noise | Environmental noise level (dBASPL) | Watch | Available |
+| Headphone Audio | Headphone audio exposure level (dBASPL) | iPhone, Watch | Available |
+| UV Exposure | UV radiation exposure | iPhone | Available |
 
 ## Diet
 
