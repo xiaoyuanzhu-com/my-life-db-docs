@@ -2,7 +2,7 @@
 title: "Claude Session Messages"
 ---
 
-> **Scope**: Backend → Frontend review of the entire session messages pipeline, covering the raw message list, page-based pagination, WebSocket delivery, stream event lifecycle, and rendering. Written 2026-02-23 against the current codebase; updated 2026-02-24 with the page-based pagination design, append-only raw message model, dropped-at-ingest types, and CLI mode removal. Where the existing [`websocket-protocol.md`](./websocket-protocol) describes an older polling-based design, this document reflects the target implementation.
+> **Scope**: Backend → Frontend review of the entire session messages pipeline, covering the raw message list, page-based pagination, WebSocket delivery, stream event lifecycle, SSE session list updates, and rendering. Written 2026-02-23 against the current codebase; updated 2026-02-24 with the page-based pagination design, append-only raw message model, dropped-at-ingest types, CLI mode removal, and SSE session update push (§8.5). Where the existing [`websocket-protocol.md`](./websocket-protocol) describes an older polling-based design, this document reflects the target implementation.
 
 ---
 
@@ -598,9 +598,98 @@ With page-based pagination (§6), the client receives only the last 2 pages on c
 
 **Implication:** `unreadResultCount > 0` only triggers when new results arrive **after** the user's last connect. Results in older pages — even if the user never scrolled up to load them — are marked as read when the session is opened. There is no stale "unread" state from historical results.
 
-### 8.5 Broadcast
+### 8.5 Session List Updates (SSE)
 
-State is broadcast via SSE (not WebSocket) to drive the session list UI and Apple client badge counts. Read state is persisted to SQLite via `MAX()` upsert — ensuring state never regresses across device switches or concurrent clients.
+Session state changes are pushed to clients via **Server-Sent Events (SSE)**, not WebSocket. The SSE channel drives the session list UI and Apple client badge counts.
+
+#### 8.5.1 Infrastructure
+
+The SSE endpoint (`GET /api/notifications/stream`) is a **shared notification bus** — session updates are one event type among several (`inbox-changed`, `library-changed`, `pin-changed`, etc.). One `EventSource` connection per browser tab, ref-counted across hooks.
+
+```
+Session.onStateChanged()                         ← in-memory callback
+  → SessionManager.notify(SessionEvent)          ← internal pub/sub
+    → NotifService.NotifyClaudeSessionUpdated()   ← SSE broadcast to all clients
+```
+
+#### 8.5.2 Event Format
+
+Every session change produces the same SSE event type:
+
+```json
+{
+  "type": "claude-session-updated",
+  "timestamp": 1708910400123,
+  "data": {
+    "sessionId": "abc-123",
+    "operation": "created | updated | activated | deactivated | deleted | read"
+  }
+}
+```
+
+#### 8.5.3 Operations & Triggers
+
+| Operation | Trigger | What changed |
+|-----------|---------|--------------|
+| `created` | New session spawned (not a resume) | Session added to active list |
+| `updated` | Title changed (`PATCH /sessions/:id`) | Session metadata |
+| `updated` | `isProcessing` flipped (`system:init` → true, `result` → false) | Working / idle state |
+| `updated` | `pendingPermissionCount` changed (`control_request` / `control_response`) | Permission state |
+| `updated` | Session archived or unarchived | Archive status |
+| `activated` | Archived session resumed (process spawned) | Session becomes interactive |
+| `deactivated` | Session process killed | Session stops running |
+| `deleted` | Session deleted entirely | Session removed from history |
+| `read` | User opens session (WS connects) | Read state updated in DB |
+
+#### 8.5.4 Frontend Consumption
+
+The frontend **does not differentiate operations**. Every `claude-session-updated` event triggers the same action — a full session list refetch:
+
+```
+SSE event (any operation)
+  → 200ms debounce
+    → refreshSessions()
+      → GET /api/claude/sessions/all
+        → merge into existing list (Map-based dedup by ID)
+          → re-sort by lastUserActivity
+            → re-derive sessionState per session (§8.1)
+```
+
+The `operation` field is informational — useful for debugging but has no effect on frontend behavior. A `created` and an `updated` trigger the exact same code path.
+
+**Why refetch instead of incremental updates?** Simplicity. The session list is small (tens of sessions, not thousands). A full refetch guarantees the client always has the latest state — no risk of stale data from missed or misordered incremental patches. The 200ms debounce batches rapid state changes (e.g., init → stream → result in quick succession) into a single refetch.
+
+#### 8.5.5 UX Coverage
+
+Every user-visible session list change triggers an SSE event → refetch → re-render:
+
+| What changes in the UI | Trigger event |
+|------------------------|---------------|
+| New session appears at top of list | `created` |
+| Session title updates | `updated` |
+| Spinner / working indicator appears | `updated` (isProcessing=true) |
+| Spinner stops | `updated` (result arrives) |
+| Permission badge appears | `updated` (pendingPermission++) |
+| Permission badge clears | `updated` (pendingPermission--) |
+| Unread dot appears (completed turn, user not viewing) | `updated` (resultCount > lastRead) |
+| Unread dot clears (on all tabs/devices) | `read` |
+| Session disappears from active list (archived) | `updated` |
+| Session removed from list entirely | `deleted` |
+| Archived session re-appears | `activated` |
+
+#### 8.5.6 Connection Management
+
+| Behavior | Detail |
+|----------|--------|
+| **Singleton** | One `EventSource` per tab, shared across hooks via ref counting |
+| **Reconnect** | Exponential backoff: 5s → 10s → 20s → 40s → 60s max |
+| **Visibility-aware** | `visibilitychange` to `visible` triggers immediate reconnect with token refresh |
+| **Non-blocking broadcast** | Backend uses `select` with `default` — drops event if subscriber channel full (buffer: 10) |
+| **Heartbeat** | Server sends `:` comment lines every 30s to keep connection alive |
+
+#### 8.5.7 Read State Persistence
+
+Read state is persisted to SQLite via `MAX()` upsert — ensuring state never regresses across device switches or concurrent clients. The connect handler writes the full `resultCount` from the raw message list to DB immediately on open, so viewing a session on any device resolves "unread" everywhere.
 
 ---
 
@@ -619,6 +708,9 @@ State is broadcast via SSE (not WebSocket) to drive the session list UI and Appl
 | **Last-2-pages burst** | WS connect handler | O(2 pages) instead of O(session) on every connect |
 | **O(1) page seal check** | `session.go` | Incremental counters (`currentPageCount`, `hasOpenStream`) avoid scanning current page on every append |
 | **Read-state MAX() upsert** | `db/claude_sessions.go` | Cross-device consistency without locks |
+| **SSE debounce (200ms)** | `use-notifications.ts` | Batches rapid session state changes into single refetch |
+| **SSE singleton connection** | `use-notifications.ts` | One `EventSource` per tab, ref-counted across hooks |
+| **Non-blocking SSE broadcast** | `notifications/service.go` | `select`/`default` — never blocks sender if subscriber is slow |
 
 ---
 
