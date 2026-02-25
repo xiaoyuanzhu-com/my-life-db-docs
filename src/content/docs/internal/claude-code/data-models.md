@@ -339,6 +339,7 @@ This is returned **exactly as-is** from the API, even though the `SummarySession
 | `queue-operation` | ❌ | Internal queue management |
 | `file-history-snapshot` | ❌ | File version tracking |
 | `rate_limit_event` | ❌ | Rate limit status from Claude API (stdout only, not persisted) |
+| `control_cancel_request` | ❌ | Cancels a pending request (e.g., user pressed Escape). Contains only `request_id`. Not displayed. |
 
 **Subtype Reference:**
 
@@ -2984,6 +2985,27 @@ The control protocol is preferred because it:
 - Preserves session state properly
 - Works consistently across platforms
 - Integrates with the JSON streaming protocol
+
+#### Cancel Request (control_cancel_request)
+
+When the user cancels a pending request (e.g., presses Escape while a permission prompt is waiting), Claude Code sends a `control_cancel_request` message to abort the request identified by `request_id`.
+
+**JSON Example:**
+```json
+{
+  "type": "control_cancel_request",
+  "request_id": "bce4e891-1727-4280-b100-2a50cf2317eb"
+}
+```
+
+**Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | string | Always `"control_cancel_request"` |
+| `request_id` | string | The ID of the request to cancel |
+
+**UI Handling:** This message is **skipped** (not rendered). It's a control-plane protocol message with no user-facing content. Filtered alongside `control_request` and `control_response` in `session-messages.tsx`.
 
 ---
 

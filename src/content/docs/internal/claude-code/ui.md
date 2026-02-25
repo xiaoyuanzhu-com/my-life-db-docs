@@ -1402,6 +1402,7 @@ Some message types are intentionally **not rendered** in the chat interface as s
 | `system.subtype: status` | Rendered as **transient indicator** at end of message list when non-null (e.g., "Compacting..."). Disappears when status is null. |
 | `type: "control_request"` | Permission protocol message - triggers permission modal, not a chat message |
 | `type: "control_response"` | Permission protocol message - sent from UI to CLI via stdin, not displayed |
+| `type: "control_cancel_request"` | Control protocol message - cancels a pending request (e.g., user pressed Escape). Contains only `request_id`, no user-facing content. See [data-models.md "Cancel Request"](./data-models.md#cancel-request-control_cancel_request). |
 | `type: "stream_event"` | Streaming transport signals (e.g., `message_start`, `content_block_delta`, `message_stop`). Stdout only, requires `--include-partial-messages`. No user-facing content. |
 | `type: "rate_limit_event"` | Rate limit status from Claude API (stdout only, not persisted). Operational metadata — when `status: "allowed"` it's noise, and when rate-limited Claude Code handles it at the CLI level (pausing/retrying). See [data-models.md "Rate Limit Event"](./data-models.md#11-rate-limit-event-stdout-only). |
 | `parent_tool_use_id` set | Subagent messages - rendered inside parent Task tool, not as top-level messages. See [data-models.md "Subagent Message Hierarchy"](./data-models.md#subagent-message-hierarchy--critical). |
