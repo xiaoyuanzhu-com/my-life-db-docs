@@ -4,6 +4,8 @@ sidebar:
   order: 1
 ---
 
+> Last edit: 2026-02-26
+
 MyLifeDB runs as a Docker container. This guide gets you up and running in a few minutes.
 
 ## Prerequisites

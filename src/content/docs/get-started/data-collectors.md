@@ -4,6 +4,8 @@ sidebar:
   order: 2
 ---
 
+> Last edit: 2026-02-26
+
 MyLifeDB can collect data from many sources across your Apple devices. Data collectors are organized into six categories: Time, Productivity, Health, Diet, Communication, and Content.
 
 Each data source has a status indicating its current availability:

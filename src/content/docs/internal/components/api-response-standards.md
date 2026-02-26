@@ -2,6 +2,8 @@
 title: "API Response Standards"
 ---
 
+> Last edit: 2026-02-26
+
 This document defines the unified response structure for all MyLifeDB API endpoints.
 
 ## Design Principles

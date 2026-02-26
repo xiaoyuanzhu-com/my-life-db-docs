@@ -2,6 +2,8 @@
 title: "Digest System"
 ---
 
+> Last edit: 2026-02-26
+
 The digest system processes files to extract content, metadata, generate previews, and create search embeddings.
 
 ## Architecture

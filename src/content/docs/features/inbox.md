@@ -2,6 +2,8 @@
 title: "Inbox"
 ---
 
+> Last edit: 2026-02-26
+
 The Inbox is your primary capture space. Drop in text, files, photos, links, voice memos — anything — without deciding where it belongs. Capture now, organize later.
 
 Everything you add is a real file on disk. There's no proprietary format — your data stays yours.

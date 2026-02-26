@@ -2,6 +2,8 @@
 title: "Module Interfaces"
 ---
 
+> Last edit: 2026-02-26
+
 This document defines the clear interfaces and protocols between modules during the refactoring.
 
 ## Core Principles

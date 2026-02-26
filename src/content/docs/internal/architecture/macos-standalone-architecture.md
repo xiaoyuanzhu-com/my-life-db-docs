@@ -2,6 +2,8 @@
 title: macOS Standalone Architecture
 ---
 
+> Last edit: 2026-02-26
+
 ## System Overview
 
 ```mermaid

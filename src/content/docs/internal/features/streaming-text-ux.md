@@ -1,6 +1,8 @@
 ---
-title: "Streaming Text UX: Smooth Word Appearance & Scrolling"
+title: "Streaming Text UX"
 ---
+
+> Last edit: 2026-02-26
 
 ## Problem Statement
 

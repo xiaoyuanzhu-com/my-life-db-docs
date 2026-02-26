@@ -1,6 +1,8 @@
 ---
-title: "Refactoring Summary - January 19, 2026"
+title: "Refactoring Summary"
 ---
+
+> Last edit: 2026-02-26
 
 This document summarizes the major refactoring work completed today.
 
@@ -68,7 +70,7 @@ omni-input/
 - **Backward compatible**: Same API, drop-in replacement
 
 #### Documentation
-Full architecture documented in [docs/omni-input.md](omni-input.md)
+Full architecture documented in [docs/omni-input-architecture.md](../features/omni-input-architecture.md)
 
 ---
 

@@ -2,11 +2,13 @@
 title: "Inbox"
 ---
 
+> Last edit: 2026-02-26
+
 **Version:** 1.0
 **Last Updated:** 2026-02-16
 **Status:** Living document — reflects current implementation + planned work
 
-> See also: [Inbox UX](../features/inbox) for web-specific scroll/pagination implementation details, [Apple Client Inbox PRD](../apple-client/inbox-prd) for native iOS/macOS specifics.
+> See also: [Inbox UX](../internal/features/inbox-ux) for web-specific scroll/pagination implementation details, [Apple Client Inbox PRD](../internal/apple-client/inbox-page) for native iOS/macOS specifics.
 
 ---
 

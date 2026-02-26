@@ -2,6 +2,8 @@
 title: "Settings"
 ---
 
+> Last edit: 2026-02-26
+
 ## Languages Setting
 
 ### Storage Format

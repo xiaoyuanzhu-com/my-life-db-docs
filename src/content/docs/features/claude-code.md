@@ -2,6 +2,8 @@
 title: "Claude Code"
 ---
 
+> Last edit: 2026-02-26
+
 MyLifeDB includes a built-in [Claude Code](https://claude.ai/code) integration — an AI coding assistant that runs directly in your browser with full access to your data.
 
 ## What It Does

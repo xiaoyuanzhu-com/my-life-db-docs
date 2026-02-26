@@ -2,6 +2,8 @@
 title: "Adaptive Thinking"
 ---
 
+> Last edit: 2026-02-26
+
 ## Overview
 
 **Adaptive thinking** is the recommended way to use extended thinking with Claude Opus 4.6 and Sonnet 4.6. Instead of manually setting a fixed thinking token budget, adaptive thinking lets Claude dynamically determine **when and how much** to use extended thinking based on the complexity of each request.

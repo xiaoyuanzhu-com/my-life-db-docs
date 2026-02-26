@@ -2,7 +2,9 @@
 title: "Claude Code Sessions"
 ---
 
-> **Scope**: Backend → Frontend review of the entire session messages pipeline, covering the raw message list, page-based pagination, WebSocket delivery, stream event lifecycle, SSE session list updates, and rendering. Written 2026-02-23 against the current codebase; updated 2026-02-24 with the page-based pagination design, append-only raw message model, dropped-at-ingest types, CLI mode removal, and SSE session update push (§8.5). Where the existing [`websocket-protocol.md`](./websocket-protocol) describes an older polling-based design, this document reflects the target implementation.
+> Last edit: 2026-02-26
+
+> **Scope**: Backend → Frontend review of the entire session messages pipeline, covering the raw message list, page-based pagination, WebSocket delivery, stream event lifecycle, SSE session list updates, and rendering. Written 2026-02-23 against the current codebase; updated 2026-02-24 with the page-based pagination design, append-only raw message model, dropped-at-ingest types, CLI mode removal, and SSE session update push (§8.5). Where the existing [`claude-code-websocket-protocol.md`](../internal/claude-code/claude-code-websocket-protocol) describes an older polling-based design, this document reflects the target implementation.
 
 ---
 
@@ -785,7 +787,7 @@ sequenceDiagram
 
 ## 11. Known Issues & Gaps
 
-These are issues identified during this review. The existing [`claude-chat-robustness-plan.md`](../design/claude-chat-robustness-plan) covers frontend-specific bugs in more detail.
+These are issues identified during this review. The existing [`claude-chat-interface-robustness-plan.md`](../internal/design/claude-chat-interface-robustness-plan) covers frontend-specific bugs in more detail.
 
 ### 11.1 No Frontend Heartbeat (Low Priority)
 

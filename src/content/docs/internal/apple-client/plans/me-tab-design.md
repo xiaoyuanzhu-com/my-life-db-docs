@@ -2,6 +2,8 @@
 title: "Me Tab Design"
 ---
 
+> Last edit: 2026-02-26
+
 **Date:** 2026-02-06
 **Status:** Implemented
 

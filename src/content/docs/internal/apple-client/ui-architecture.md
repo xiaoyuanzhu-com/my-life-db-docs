@@ -1,6 +1,8 @@
 ---
-title: "MyLifeDB Apple Client - UI Architecture"
+title: "UI Architecture"
 ---
+
+> Last edit: 2026-02-26
 
 > Hybrid Native + WebView approach for the iOS/macOS client.
 

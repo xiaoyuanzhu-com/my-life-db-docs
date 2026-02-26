@@ -1,6 +1,8 @@
 ---
-title: "MyLifeDB Apple Client - Architecture"
+title: "Architecture"
 ---
+
+> Last edit: 2026-02-26
 
 > Native iOS/macOS client for the MyLifeDB personal knowledge management system.
 
