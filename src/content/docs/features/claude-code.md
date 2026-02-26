@@ -1,25 +1,54 @@
 ---
 title: "Claude Code"
+sidebar:
+  order: 3
 ---
 
 > Last edit: 2026-02-26
 
-MyLifeDB includes a built-in [Claude Code](https://claude.ai/code) integration — an AI coding assistant that runs directly in your browser with full access to your data.
+MyLifeDB includes a built-in [Claude Code](https://claude.ai/code) integration, giving you an AI coding assistant that runs directly in your browser. You can use it to analyze your files, automate tasks, or interact with your data programmatically.
 
-## What It Does
+## What is Claude Code?
 
-Claude Code is a conversational AI that can read, search, create, and modify files in your MyLifeDB data directory. You interact with it through a chat interface, and it executes actions on your behalf.
+Claude Code is Anthropic's AI-powered coding assistant that runs as a CLI tool. MyLifeDB embeds it in a web-based terminal, so you can use it from any device — desktop, tablet, or phone — without installing anything locally.
 
-Use it to analyze your files, automate repetitive tasks, search across your data, or build scripts that work with your content.
+Each Claude Code session is a persistent conversation with Claude that has full access to your MyLifeDB data directory. You can ask it to read files, search content, write scripts, or help you organize your data.
 
-## Starting a Session
+## Getting Started
 
-1. Navigate to the **Claude** page.
-2. Click **New Session**.
-3. On your first use, authenticate via the OAuth link Claude provides. This is one-time — future sessions reuse your credentials.
-4. Start typing.
+1. Open MyLifeDB and navigate to the **Claude** page.
+2. Click **New Session** to start a fresh conversation.
+3. On your first session, Claude will prompt you to authenticate via OAuth — click the link in the terminal and complete the sign-in.
+4. Once authenticated, start chatting with Claude.
 
-## Example Uses
+Authentication is one-time. All future sessions reuse your credentials automatically.
+
+## Managing Sessions
+
+### Multiple Sessions
+
+You can run multiple Claude sessions at once. Each session is independent — use one for data analysis, another for scripting, and so on. Sessions appear as tabs at the top of the page.
+
+### Session Persistence
+
+Sessions keep running even if you close your browser. When you come back:
+
+- Your sessions are listed in the sidebar.
+- Click any session to reconnect and see where you left off.
+- The full conversation history is preserved.
+
+### Cross-Device Access
+
+Since sessions run on the server, you can start a session on your desktop and continue it from your phone. All devices see the same sessions and the same output.
+
+### Renaming and Deleting
+
+- **Rename** a session by clicking its title in the sidebar to keep your sessions organized.
+- **Delete** a session when you're done with it. This stops the Claude process and removes it from the list.
+
+## What You Can Do
+
+Here are some examples of what you can ask Claude in MyLifeDB:
 
 **Analyze your data**
 > "Summarize all the articles I saved this week"
@@ -37,25 +66,19 @@ Use it to analyze your files, automate repetitive tasks, search across your data
 > "Write a script that renames all photos by their date taken"
 > "Create a markdown summary of every file in my inbox"
 
-## Sessions
-
-Each session is an independent conversation with its own context. You can run multiple sessions simultaneously — one for data analysis, another for organizing files, and so on.
-
-Sessions persist on the server. Close your browser and come back later — your sessions are still there with full conversation history. You can also start a session on one device and continue it from another.
-
-Rename sessions to keep them organized. Delete sessions when you're done with them.
+Claude has access to your data directory and can read, create, and modify files. It will ask for your permission before making changes.
 
 ## Permissions
 
-When Claude wants to perform an action — reading a file, running a command, editing something — it asks for your approval first.
+Claude Code uses a permission system to keep you in control. When Claude wants to perform an action — like reading a file, running a command, or editing something — it asks for your approval first.
 
-| Option | What it does |
-|--------|-------------|
-| **Allow** | Permit this one action |
-| **Always Allow** | Permit this type of action for the rest of the session |
-| **Deny** | Block the action |
+For each permission request, you can:
 
-Claude never modifies your files without your knowledge.
+- **Allow** — Permit this one action.
+- **Always Allow** — Permit this type of action for the rest of the session without asking again.
+- **Deny** — Block the action.
+
+This ensures Claude never modifies your files without your knowledge.
 
 ## Streaming
 
@@ -65,4 +88,4 @@ Claude's responses stream in real-time as they're generated. You see partial out
 
 - **Be specific** — "Summarize the PDF I uploaded today" works better than "summarize stuff".
 - **Use sessions for projects** — Keep a long-running session for a specific task so Claude remembers the context.
-- **Review changes** — Claude shows you exactly what it's doing. Check file modifications before confirming.
+- **Check the output** — Claude shows you exactly what it's doing. Review file changes before confirming.
