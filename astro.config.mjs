@@ -47,10 +47,6 @@ export default defineConfig({
 							autogenerate: { directory: 'internal/features' },
 						},
 						{
-							label: 'Claude Code',
-							autogenerate: { directory: 'internal/claude-code' },
-						},
-						{
 							label: 'Apple Client',
 							autogenerate: { directory: 'internal/apple-client' },
 						},
