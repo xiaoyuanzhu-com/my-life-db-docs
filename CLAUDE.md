@@ -107,4 +107,20 @@ This site has `astro-mermaid` configured — fenced ` ```mermaid ` blocks render
 |----------|-----------|---------|
 | Doc files | `kebab-case.md` | `ui-architecture.md` |
 | Directory names | `kebab-case` | `apple-client/` |
-| Frontmatter title | Title Case | `"MyLifeDB Apple Client - Architecture"` |
+| Frontmatter title | Title Case, matches filename | `ui-architecture.md` → `"UI Architecture"` |
+
+## Doc Format Rules
+
+1. **Filename = title.** The frontmatter `title` must be the Title Case form of the kebab-case filename. If you rename a file, update the title (and vice versa). Example: `claude-code-sessions.md` → `title: "Claude Code Sessions"`.
+
+2. **Last-edit date on top.** Every doc must have a `> Last edit: YYYY-MM-DD` blockquote immediately after the frontmatter (before any other content). Update this date whenever the doc is edited.
+
+```markdown
+---
+title: "Example Doc"
+---
+
+> Last edit: 2026-02-26
+
+Content starts here.
+```
