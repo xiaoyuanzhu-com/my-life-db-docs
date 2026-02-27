@@ -1,5 +1,7 @@
 ---
 title: "Claude Code"
+sidebar:
+  order: 0
 ---
 
 > Last edit: 2026-02-26

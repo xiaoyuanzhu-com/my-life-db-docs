@@ -26,7 +26,6 @@ export default defineConfig({
 				{
 					label: 'Tech Design',
 					items: [
-						{ slug: 'tech-design/claude-code' },
 						{
 							label: 'Claude Code',
 							autogenerate: { directory: 'tech-design/claude-code' },
