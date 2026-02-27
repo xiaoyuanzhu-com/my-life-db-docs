@@ -1,7 +1,7 @@
 ---
 title: "Data Collectors"
 sidebar:
-  order: 2
+  order: 3
 ---
 
 > Last edit: 2026-02-26
