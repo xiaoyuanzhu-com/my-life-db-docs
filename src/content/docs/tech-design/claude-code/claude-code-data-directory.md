@@ -347,7 +347,7 @@ This is returned **exactly as-is** from the API, even though the `SummarySession
 
 | Type | Subtypes |
 |------|----------|
-| `system` | `init`, `compact_boundary`, `microcompact_boundary`, `turn_duration`, `api_error`, `local_command`, `hook_started`, `status`, `task_notification`, `task_started` |
+| `system` | `init`, `compact_boundary`, `microcompact_boundary`, `turn_duration`, `api_error`, `local_command`, `hook_started`, `status`, `task_notification`, `task_started`, `task_progress` |
 | `progress` | `hook_progress`, `bash_progress`, `agent_progress`, `query_update`, `search_results_received` |
 | `result` | `success`, `error` |
 | `stream_event` | `message_start`, `content_block_start`, `content_block_delta`, `content_block_stop`, `message_delta`, `message_stop` |
@@ -1023,6 +1023,49 @@ When a Task tool spawns a subagent, a `task_started` system message is emitted t
 | `session_id` | string | Session UUID |
 
 **Rendering:** Skipped — filtered out in `session-messages.tsx`. The `task_started` message is redundant with the Task `tool_use` block, which already displays the same `description` in its header. Note: `tool_use_id` provides a linking field back to the parent tool block (similar to `parentToolUseID` on `agent_progress`), but since the message is still fully redundant with the tool block header, it remains skipped.
+
+#### Task Progress Messages
+
+While a Task subagent is running, Claude Code emits periodic `task_progress` system messages showing the subagent's current activity and cumulative execution stats. These sit between `task_started` (agent began) and `task_notification` (agent completed) in the Task lifecycle.
+
+**Example:**
+```json
+{
+  "type": "system",
+  "subtype": "task_progress",
+  "description": "Reading ~/my-life-db/data/guideline.md",
+  "last_tool_name": "Read",
+  "task_id": "a0f97a27b7266cb17",
+  "tool_use_id": "toolu_01R2TR3NvzR1Tb82DFC77wgv",
+  "session_id": "8306d30a-0c46-4a88-84ca-668a63d97f2a",
+  "usage": {
+    "duration_ms": 1998,
+    "tool_uses": 1,
+    "total_tokens": 13058
+  },
+  "uuid": "92fd4321-ee1d-43dd-9eeb-8cae38d11ba8"
+}
+```
+
+**Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | string | Always `"system"` |
+| `subtype` | string | Always `"task_progress"` |
+| `description` | string | Current activity of the subagent (e.g., "Reading ~/path/file.md", "Running Find documentation files"). Note: unlike `task_started.description` (which is the overall task description), this field changes with each update to reflect what the subagent is currently doing. |
+| `last_tool_name` | string | Name of the last tool used by the subagent (e.g., "Read", "Bash", "Glob") |
+| `task_id` | string | Agent ID — same as on `task_started` and `task_notification` |
+| `tool_use_id` | string | Links back to the parent Task `tool_use` block (same linking field as `task_started` and `task_notification`) |
+| `session_id` | string | Session UUID |
+| `usage` | object | Cumulative execution stats: `duration_ms`, `tool_uses`, `total_tokens`. Stats grow over time — only the latest message should be displayed. |
+
+**Rendering:** Rendered inside the parent Task tool block via `taskProgressMap` (keyed by `tool_use_id`). When the Task tool is in "running" status, the latest `task_progress` message's `description` replaces the generic "Agent is working..." text, and cumulative `usage` stats are shown inline.
+
+**Task Lifecycle:**
+```
+task_started → task_progress (periodic) → agent_progress (streaming) → task_notification (final)
+```
 
 #### Background Async Task Data Flow ⭐ SPECIAL PATTERN
 

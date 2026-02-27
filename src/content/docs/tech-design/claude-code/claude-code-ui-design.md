@@ -1409,6 +1409,7 @@ Some message types are intentionally **not rendered** in the chat interface as s
 | `type: "rate_limit_event"` | Rate limit status from Claude API (stdout only, not persisted). Operational metadata — when `status: "allowed"` it's noise, and when rate-limited Claude Code handles it at the CLI level (pausing/retrying). See [claude-code-data-directory.md "Rate Limit Event"](./claude-code-data-directory.md#11-rate-limit-event-stdout-only). |
 | `parent_tool_use_id` set | Subagent messages - rendered inside parent Task tool, not as top-level messages. See [claude-code-data-directory.md "Subagent Message Hierarchy"](./claude-code-data-directory.md#subagent-message-hierarchy--critical). |
 | `system.subtype: task_started` | Redundant with Task tool_use block — the Task tool header already shows the same description. Note: `tool_use_id` field now links back to the parent tool block, but the message remains redundant regardless. |
+| `system.subtype: task_progress` | Rendered inside parent Task tool via `taskProgressMap`. Shows live subagent status (current activity + cumulative usage stats) while the Task is running. Filtered in `session-messages.tsx`. |
 
 **Progress Messages:**
 
@@ -1423,6 +1424,16 @@ Progress messages (`type: "progress"`) are filtered from the main message list b
 | `search_results_received` | (future) | Web search results received |
 
 Progress messages are linked to their parent tool via `parentToolUseID`, which maps to the `tool_use` block's `id` field.
+
+**Task Progress Messages (system subtype, not progress type):**
+
+`task_progress` messages are structurally different from the progress messages above — they are `type: "system"` with `subtype: "task_progress"`, not `type: "progress"`. They link to the parent Task tool via `tool_use_id` (not `parentToolUseID`). Only the latest message per Task is rendered (cumulative stats).
+
+| Field | Rendered As | Description |
+|-------|------------|-------------|
+| `description` | Status line text | Current subagent activity (replaces "Agent is working...") |
+| `usage` | Inline stats | Cumulative duration, tool uses, token count |
+| `last_tool_name` | (available) | Last tool used by subagent (available for future use) |
 
 **Subagent Messages:**
 
