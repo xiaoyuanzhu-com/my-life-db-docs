@@ -25,6 +25,7 @@ Visit https://my.xiaoyuanzhu.com/.
 
 | Platform | Link |
 |----------|------|
+| PWA (all platforms) | [Install from browser](https://my.xiaoyuanzhu.com/) |
 | iOS | [Join TestFlight](https://testflight.apple.com/join/Rh1S5aKq) |
 | macOS | [Download from GitHub](https://github.com/xiaoyuanzhu-com/my-life-db-apple/releases) |
 | Android | TBD |
