@@ -8,7 +8,9 @@ sidebar:
 
 ## 1. Create your account
 
-Use the invitation link we sent you to register a 小圆猪 account. This account works across all 小圆猪 services, including MyLifeDB.
+MyLifeDB hosted service is currently under beta testing and invitation-only. Please follow us on [小红书](https://www.xiaohongshu.com/user/profile/6868961e000000001d017125) or join our [Discord](https://discord.gg/89pWBuxPw).
+
+![Create account](../../../assets/get-started/create-account.png)
 
 ## 2. Sign in on the web
 
