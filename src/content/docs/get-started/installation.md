@@ -20,10 +20,17 @@ Visit https://my.xiaoyuanzhu.com/.
 
 ## 3. Install the app
 
+<div style="display: flex; gap: 2rem; align-items: flex-start;">
+<div>
+
 | Platform | Link |
 |----------|------|
 | iOS | [Join TestFlight](https://testflight.apple.com/join/Rh1S5aKq) |
-| macOS | [Download](https://github.com/xiaoyuanzhu-com/my-life-db-apple/releases) |
+| macOS | [Download from GitHub](https://github.com/xiaoyuanzhu-com/my-life-db-apple/releases) |
 | Android | TBD |
 | Windows | TBD |
 | Linux | TBD |
+
+</div>
+<img src="/images/get-started/my-life-db-ios.png" alt="MyLifeDB iOS app" width="300" />
+</div>
