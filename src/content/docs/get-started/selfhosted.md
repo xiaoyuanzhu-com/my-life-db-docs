@@ -1,8 +1,10 @@
 ---
-title: "Self-Hosted"
+title: "Selfhosted"
 sidebar:
   order: 2
 ---
+
+> Last edit: 2026-02-28
 
 Run MyLifeDB on your own hardware with Docker.
 

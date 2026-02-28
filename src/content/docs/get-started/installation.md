@@ -4,7 +4,7 @@ sidebar:
   order: 1
 ---
 
-> Want to run MyLifeDB on your own server? See [Self-Hosted](./self-hosted).
+> Want to run MyLifeDB on your own server? See [Selfhosted](./selfhosted).
 
 ## 1. Create your account
 
