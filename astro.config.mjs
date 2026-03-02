@@ -5,6 +5,8 @@ import mermaid from 'astro-mermaid';
 
 // https://astro.build/config
 export default defineConfig({
+	site: 'https://my.xiaoyuanzhu.com',
+	base: '/docs',
 	integrations: [
 		mermaid(),
 		starlight({
