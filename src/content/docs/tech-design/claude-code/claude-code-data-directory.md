@@ -506,6 +506,7 @@ Example of skipped content:
         "type": "tool_use",
         "id": "toolu_014EkHUXLk8xUUUqjocQNd8g",
         "name": "Bash",
+        "caller": { "type": "direct" },
         "input": {
           "command": "cd /path/to/dir && go build .",
           "description": "Build from backend directory"
@@ -994,7 +995,7 @@ This allows the frontend to use the same `parent_tool_use_id` based logic for bo
 
 #### Task Started Messages
 
-When a Task tool spawns a subagent, a `task_started` system message is emitted to indicate the task has begun execution. This is the counterpart to `task_notification` (which indicates completion).
+When a Task/Agent tool spawns a subagent, a `task_started` system message is emitted to indicate the task has begun execution. This is the counterpart to `task_notification` (which indicates completion). Note: Claude Code renamed the `Task` tool to `Agent` — both names appear in sessions.
 
 **Example:**
 ```json
@@ -2632,6 +2633,16 @@ Claude's stream-json output has **two levels of types**:
 | `text` | Text response | `assistant` |
 | `tool_use` | Tool invocation request | `assistant` |
 | `tool_result` | Tool execution result | `user` (as tool response) |
+
+**`tool_use` Content Block Fields:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | string | yes | Always `"tool_use"` |
+| `id` | string | yes | Unique tool invocation ID (e.g., `"toolu_01P3X1jpr9..."`) |
+| `name` | string | yes | Tool name. Note: Claude Code renamed `"Task"` → `"Agent"` (both still appear in historical sessions) |
+| `input` | object | yes | Tool-specific parameters |
+| `caller` | object | no | Invocation context. Currently observed: `{ "type": "direct" }` (model chose to invoke the tool). May have other types in the future. |
 
 **Example message with nested types:**
 ```json
