@@ -50,11 +50,6 @@ services:
       - ./.ssh:/home/xiaoyuanzhu/.ssh
       - ./.config:/home/xiaoyuanzhu/.config
     env_file: .env
-    environment:
-      - XDG_CONFIG_HOME=/home/xiaoyuanzhu/.config
-      - USER_DATA_DIR=/home/xiaoyuanzhu/my-life-db/data
-      - APP_DATA_DIR=/home/xiaoyuanzhu/my-life-db/.my-life-db
-      - MEILI_HOST=http://meilisearch:7700
     depends_on:
       - meilisearch
     restart: unless-stopped
@@ -64,15 +59,17 @@ services:
     volumes:
       - ./.my-life-db/meilisearch:/meili_data
     env_file: .env
-    environment:
-      - MEILI_MASTER_KEY=${MEILI_API_KEY:-change_me_to_a_random_string}
-      - MEILI_ENV=production
     restart: unless-stopped
 ```
 
 3. Update environment variables
 
 ```bash
+# ===== Container paths (match docker-compose volume mounts) =====
+XDG_CONFIG_HOME=/home/xiaoyuanzhu/.config
+USER_DATA_DIR=/home/xiaoyuanzhu/my-life-db/data
+APP_DATA_DIR=/home/xiaoyuanzhu/my-life-db/.my-life-db
+
 # ===== Port =====
 MLD_PORT=12345
 
@@ -88,7 +85,10 @@ MLD_AUTH_MODE=none
 # MLD_EXPECTED_USERNAME=your-username
 
 # ===== Search =====
+MEILI_HOST=http://meilisearch:7700
 MEILI_API_KEY=change_me_to_a_random_string
+MEILI_MASTER_KEY=change_me_to_a_random_string
+MEILI_ENV=production
 
 # ===== AI (optional) =====
 # OPENAI_API_KEY=sk-...
@@ -102,7 +102,15 @@ MEILI_API_KEY=change_me_to_a_random_string
 
 Web app with PWA support is already available, visit http://localhost:12345.
 
-To use with native apps, just change the server URL to your self-hosted instance.
+To use with native apps, tap the server URL at the bottom of the login screen and change it to your self-hosted instance.
+
+<div style="display: flex; gap: 1rem;">
+
+![Welcome screen](../../../assets/get-started/welcome-ios.png)
+
+![Custom server](../../../assets/get-started/custom-server-ios.png)
+
+</div>
 
 ## Reverse Proxy
 
