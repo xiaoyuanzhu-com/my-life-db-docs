@@ -33,5 +33,5 @@ Visit https://my.xiaoyuanzhu.com/.
 | Linux | TBD |
 
 </div>
-<img src="/images/get-started/my-life-db-ios.png" alt="MyLifeDB iOS app" width="300" />
+<img src="/docs/images/get-started/my-life-db-ios.png" alt="MyLifeDB iOS app" width="300" />
 </div>
