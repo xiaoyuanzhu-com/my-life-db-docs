@@ -72,16 +72,16 @@ When working on a specific area, read the corresponding component doc:
 
 | Area | Document | When to Read |
 |------|----------|--------------|
-| Server lifecycle | [components/server-component.md](../../components/server-component/) | Component initialization, shutdown, middleware |
-| Configuration | [components/configuration.md](../../components/configuration/) | Environment variables, settings |
-| Claude Code integration | [tech-design/claude-code/claude-code-integration.md](../../../tech-design/claude-code/claude-code-integration/) | WebSocket, sessions, message handling, permissions |
-| File processing | [components/digest-system.md](../../components/digest-system/) | Digesters, file metadata extraction |
-| Filesystem watching | [components/filesystem-service.md](../../components/filesystem-service/) | File watcher, scanner, change events |
-| Real-time updates | [components/notifications-service.md](../../components/notifications-service/) | SSE, event broadcasting |
-| Authentication | [components/authentication.md](../../components/authentication/) | OAuth, password auth modes |
-| HTTP API | [components/http-api.md](../../components/http-api/) | Endpoints, handlers, routes |
-| Database | [components/database-layer.md](../../components/database-layer/) | SQLite, migrations, queries |
-| External services | [components/external-service-integrations.md](../../components/external-service-integrations/) | OpenAI, Qdrant, Meilisearch, etc. |
+| Server lifecycle | [components/server-component.md](/docs/internal/components/server-component/) | Component initialization, shutdown, middleware |
+| Configuration | [components/configuration.md](/docs/internal/components/configuration/) | Environment variables, settings |
+| Claude Code integration | [tech-design/claude-code/claude-code-integration.md](/docs/tech-design/claude-code/claude-code-integration/) | WebSocket, sessions, message handling, permissions |
+| File processing | [components/digest-system.md](/docs/internal/components/digest-system/) | Digesters, file metadata extraction |
+| Filesystem watching | [components/filesystem-service.md](/docs/internal/components/filesystem-service/) | File watcher, scanner, change events |
+| Real-time updates | [components/notifications-service.md](/docs/internal/components/notifications-service/) | SSE, event broadcasting |
+| Authentication | [components/authentication.md](/docs/internal/components/authentication/) | OAuth, password auth modes |
+| HTTP API | [components/http-api.md](/docs/internal/components/http-api/) | Endpoints, handlers, routes |
+| Database | [components/database-layer.md](/docs/internal/components/database-layer/) | SQLite, migrations, queries |
+| External services | [components/external-service-integrations.md](/docs/internal/components/external-service-integrations/) | OpenAI, Qdrant, Meilisearch, etc. |
 
 ## Event Flow Between Components
 
@@ -225,7 +225,7 @@ Use zerolog (`backend/log/`):
 ### Configuration
 
 Configuration is loaded once at startup via `config.Get()` (singleton).
-All settings come from environment variables. See [components/configuration.md](../../components/configuration/).
+All settings come from environment variables. See [components/configuration.md](/docs/internal/components/configuration/).
 
 ### Database Migrations
 

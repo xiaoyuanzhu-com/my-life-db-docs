@@ -7,6 +7,7 @@ import mermaid from 'astro-mermaid';
 export default defineConfig({
 	site: 'https://my.xiaoyuanzhu.com',
 	base: '/docs',
+	trailingSlash: 'always',
 	outDir: './dist/docs',
 	integrations: [
 		mermaid(),
