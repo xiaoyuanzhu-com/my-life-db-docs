@@ -21,7 +21,14 @@ export default defineConfig({
 				},
 				{
 					label: 'Features',
-					autogenerate: { directory: 'features' },
+					items: [
+						{ slug: 'features/inbox' },
+						{ slug: 'features/claude-code' },
+						{
+							label: 'Data Collectors',
+							autogenerate: { directory: 'features/data-collectors' },
+						},
+					],
 				},
 				{
 					label: 'Product Design',
