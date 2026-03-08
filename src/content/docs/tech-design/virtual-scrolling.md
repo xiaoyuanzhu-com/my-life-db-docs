@@ -5,6 +5,86 @@ description: Technical design for the virtual scrolling system
 
 > Last edit: 2026-03-08
 
+## Scroll UX contract
+
+Every scroll interaction must satisfy a set of UX guarantees. The labels (A–L) are defined inline below and referenced throughout this document and in bug reports.
+
+**1. Scroll up** — drag finger up
+- A, follows finger
+- B, momentum after lift
+- C, decelerates
+- D, no jump while touching
+- E, no jump during momentum
+- F, no jump after momentum
+
+**2. Scroll down** — drag finger down
+- A, follows finger
+- B, momentum after lift
+- C, decelerates
+- D, no jump while touching
+- E, no jump during momentum
+- F, no jump after momentum
+
+**3. Quick flick** — fast swipe, lift early
+- B, momentum after lift
+- C, decelerates
+- E, no jump during momentum
+- F, no jump after momentum
+
+**4. Reverse mid-gesture** — change direction without lifting
+- A, follows finger
+- D, no jump while touching
+- L, instant reversal
+
+**5. Tap to stop momentum**
+- D, no jump while touching
+- J, momentum stops immediately
+
+**6. Scroll up near top** — load older messages
+- A, follows finger
+- B, momentum after lift
+- C, decelerates
+- D, no jump while touching
+- E, no jump during momentum
+- F, no jump after momentum
+- K, older messages load seamlessly
+
+**7. Long continuous scroll** — hits buffer edge
+- A, follows finger
+- D, no jump while touching (best-effort, minor jitter possible)
+
+**8. At bottom + streaming** — new content arrives
+- G, pinned to bottom
+- H, auto-scrolls to new content
+
+**9. Scrolled up + streaming** — new content arrives
+- I, stays at current position
+
+**10. Scroll back to bottom** — after scrolling up
+- A, follows finger
+- B, momentum after lift
+- C, decelerates
+- D, no jump while touching
+- E, no jump during momentum
+- F, no jump after momentum
+- G, pinned once at bottom
+- H, auto-scrolls once at bottom
+
+**11. Scroll up during streaming** — drag up while content growing
+- A, follows finger
+- B, momentum after lift
+- C, decelerates
+- D, no jump while touching
+- E, no jump during momentum
+- F, no jump after momentum
+- I, stays at current position
+
+**12. Finger lift, no momentum** — release at zero velocity
+- F, no jump after scroll ends
+
+**13. Return to page** — navigate away and back
+- G, pinned to bottom
+
 ## How virtual lists work
 
 A virtual list only renders items that are visible (plus a buffer). Off-screen items are replaced by spacer divs that approximate their height. As the user scrolls, items swap in and out — spacers shrink, real items appear, and vice versa.
@@ -121,11 +201,27 @@ When the range unfreezes after momentum ends, `startIndex` may change — items 
 
 ### How it works
 
-Before any range change that moves `startIndex`, we capture an **anchor**: a visible DOM element near the viewport center, plus its current offset from the top of the scroll container (via `getBoundingClientRect`). Each rendered item carries a `data-vi` (virtual index) attribute, so the anchor lookup is a single `querySelector`.
+The key insight: when items change on only one side of the viewport, we can use a **positional invariant** — a distance that doesn't change — instead of measuring drift.
 
-After React commits the DOM change, a `useLayoutEffect` (runs before paint) finds the same element, measures its new offset, and adjusts `scrollTop` by the drift. The element survives the range change because React reuses it via its stable `key`.
+**Scroll up (items added above viewport):** The content below the viewport hasn't changed, so `scrollBottom` (distance from viewport bottom to content bottom) is invariant. Capture it before the DOM change, restore it after:
+
+```js
+// Before: capture invariant
+const scrollBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+
+// After (useLayoutEffect): restore
+el.scrollTop = el.scrollHeight - el.clientHeight - scrollBottom
+```
+
+This is exact — no element lookup, no `getBoundingClientRect`, no drift measurement. Pure arithmetic.
+
+**Scroll down (items added below viewport):** `scrollTop` is already correct — nothing above the viewport changed. No adjustment needed.
+
+**Both ends never change simultaneously.** Range updates are split into two phases — expand first (one side), then shrink (the other side) on the next update cycle. This guarantees the positional invariant always holds.
 
 ```
+Scroll up — adding items above:
+
 Before:                         After:
 ┌─────────────┐                ┌─────────────┐
 │ top spacer  │ 4440px         │ top spacer  │ 2520px
@@ -133,22 +229,31 @@ Before:                         After:
 │ item 37     │                │ item 21     │  ← new items
 │ item 38     │                │ ...         │
 │ ...         │                │ item 37     │
-│ ★ item 57  │ ← anchor       │ item 38     │
+│ [viewport]  │                │ item 38     │
 │ ...         │                │ ...         │
-│ item 128    │                │ ★ item 57  │ ← same element
+│ item 128    │                │ [viewport]  │  ← same position
 ├─────────────┤                │ ...         │
-│ bot spacer  │                │ item 128    │
+│ bot spacer  │ 800px          │ item 128    │
 └─────────────┘                ├─────────────┤
-                               │ bot spacer  │
-scrollTop: 6873                └─────────────┘
+                               │ bot spacer  │ 800px  ← unchanged
+scrollBottom: 800              └─────────────┘
 
-                               scrollTop: 6873 + drift
-                               (★ stays at same viewport offset)
+                               scrollBottom: 800  ← invariant
+                               scrollTop = newScrollHeight - clientHeight - 800
 ```
 
-### Why element-based, not height-delta
+### Why scrollBottom, not element-based
 
-An earlier approach snapshotted `scrollHeight` before the change and adjusted `scrollTop` by the delta afterward. This is mathematically correct — but on iOS Safari, setting `scrollTop` in a layout effect still produces a visible frame of the wrong position. The element-based approach produces identical results but is more robust: it measures actual element positions, not estimated spacer arithmetic.
+An earlier version captured a visible DOM element's viewport offset via `getBoundingClientRect`, then measured the drift after the DOM change and adjusted `scrollTop`. This works, but the drift exists because spacer estimates don't match real item heights — it's compensating for an error. The scrollBottom approach avoids the error entirely: it doesn't care what the spacer heights are, only that the content below the viewport didn't change.
+
+### One side at a time
+
+The idle range update never changes both `startIndex` and `endIndex` in the same render. Instead it processes one operation per cycle:
+
+1. **Expand** (higher priority) — add items on whichever side needs them
+2. **Shrink** (lower priority) — remove items from the far side on the next update
+
+This eliminates the need for element-based anchoring entirely. Since only one side changes per render, either `scrollBottom` is invariant (items added above) or `scrollTop` is already correct (items added below, or items removed from either side).
 
 ### When anchoring is skipped
 
@@ -156,18 +261,18 @@ During momentum scroll (`userScrollIntent === true`), anchoring is skipped entir
 
 ### Use cases and expected behavior
 
-| Scenario | What happens | Anchor? | Expected result |
-|----------|-------------|---------|-----------------|
-| **Normal swipe + momentum** | Range frozen during scroll. No DOM changes. | No | Perfectly smooth, no jitter |
-| **Momentum ends (scrollend)** | Range unfreezes. `startIndex` may change (items added/removed above). | Yes | Anchor element stays at same viewport offset. No visible jump. |
-| **Long swipe hits buffer edge** | Emergency expand adds items (never removes). `startIndex` decreases. | Yes (if `startIndex` changes) | Brief possible jitter from expand, but anchor minimizes it. Momentum not killed. |
-| **Direction reversal mid-gesture** | Browser fires `scrollend` — ignored because `fingerDown` is true. Range stays frozen. | No | Scroll continues tracking finger without interruption |
-| **Finger lift, no momentum** | 150ms deferred finalize resets to idle. Range updates. | Yes | Anchor prevents jump. Happens after finger lift so no momentum to kill. |
-| **Finger lift, momentum follows** | Scroll events cancel deferred timer. Real `scrollend` fires after momentum. | Yes | Same as "momentum ends" — anchor after momentum is done. |
-| **Prepend (new data at top)** | Count changes, items shift. Detected in render phase. | No (uses height-delta) | `scrollTop` adjusted by `scrollHeight` delta. During momentum: skipped (content jumps but momentum preserved). |
-| **Idle range shrink** | Lazy cleanup removes items far from viewport. `startIndex` may increase. | Yes | Items removed from above → spacer grows. Anchor keeps position stable. |
-| **Content resize (streaming)** | `ResizeObserver` fires. `stickIfNeeded` may scroll to bottom. | No | Only acts when `shouldStick && !fingerDown && phase !== 'programmatic'`. |
-| **Desktop (Chrome/Firefox)** | Browser `overflow-anchor` handles everything natively. | Captured but drift is 0 | No adjustment needed. Anchor is a no-op. |
+| Scenario | What happens | Strategy | Expected result |
+|----------|-------------|----------|-----------------|
+| **Normal swipe + momentum** | Range frozen during scroll. No DOM changes. | None | Perfectly smooth, no jitter |
+| **Momentum ends (scrollend)** | Range unfreezes. Expand one side, then shrink other side on next cycle. | scrollBottom (if top expands) | Exact restoration. No visible jump. |
+| **Long swipe hits buffer edge** | Emergency expand adds items (never removes). `startIndex` decreases. | scrollBottom | Exact. Momentum not killed (skipped during momentum). |
+| **Direction reversal mid-gesture** | Browser fires `scrollend` — ignored because `fingerDown` is true. Range stays frozen. | None | Scroll continues tracking finger without interruption |
+| **Finger lift, no momentum** | 150ms deferred finalize resets to idle. Range updates (one side at a time). | scrollBottom (if top changes) | Exact restoration. Happens after finger lift so no momentum to kill. |
+| **Finger lift, momentum follows** | Scroll events cancel deferred timer. Real `scrollend` fires after momentum. | scrollBottom (if top changes) | Same as "momentum ends". |
+| **Prepend (new data at top)** | Count changes, items shift. Detected in render phase. | Height-delta | `scrollTop` adjusted by `scrollHeight` delta. During momentum: skipped (content jumps but momentum preserved). |
+| **Idle range shrink** | Removes items from one side only. | None | Top shrink: scrollTop already correct. Bottom shrink: no effect on viewport. |
+| **Content resize (streaming)** | `ResizeObserver` fires. `stickIfNeeded` may scroll to bottom. | None | Only acts when `shouldStick && !fingerDown && phase !== 'programmatic'`. |
+| **Desktop (Chrome/Firefox)** | Browser `overflow-anchor` handles everything natively. | scrollBottom captured but adjustment is 0 | No adjustment needed. |
 
 ## The estimate mismatch bug (2026-03)
 
