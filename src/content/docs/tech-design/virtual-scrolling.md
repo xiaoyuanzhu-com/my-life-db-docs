@@ -3,7 +3,7 @@ title: Virtual Scrolling
 description: Technical design for the virtual scrolling system
 ---
 
-> Last edit: 2026-03-08
+> Last edit: 2026-03-08 (updated platform behaviors reference)
 
 ## Scroll UX contract
 
@@ -273,6 +273,72 @@ During momentum scroll (`userScrollIntent === true`), anchoring is skipped entir
 | **Idle range shrink** | Removes items from one side only. | None | Top shrink: scrollTop already correct. Bottom shrink: no effect on viewport. |
 | **Content resize (streaming)** | `ResizeObserver` fires. `stickIfNeeded` may scroll to bottom. | None | Only acts when `shouldStick && !fingerDown && phase !== 'programmatic'`. |
 | **Desktop (Chrome/Firefox)** | Browser `overflow-anchor` handles everything natively. | scrollBottom captured but adjustment is 0 | No adjustment needed. |
+
+## Platform behaviors reference (2026-03)
+
+Understanding how each platform behaves is essential before making any change to scroll handling. This table documents what we have learned through testing — our ground truth.
+
+### Feature support
+
+| Feature | iOS Safari | macOS Safari | Chrome (mobile) | Chrome (desktop) | Firefox |
+|---------|-----------|-------------|----------------|-----------------|---------|
+| `overflow-anchor` | ❌ No | ❌ No | ✅ Yes | ✅ Yes | ✅ Yes |
+| `scrollend` event | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
+| Touch momentum (inertia) | ✅ Yes | ❌ No (mouse/trackpad) | ✅ Yes | ❌ No | ❌ No |
+| `touchstart` / `touchend` events | ✅ Yes | ❌ No | ✅ Yes | ❌ No | ❌ No |
+| ResizeObserver | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
+
+### Programmatic `scrollTop` behavior
+
+Setting `el.scrollTop = X` from JavaScript has platform-specific side effects that affect our anchoring strategy.
+
+| Behavior | iOS Safari | macOS Safari | Chrome | Firefox |
+|---------|-----------|-------------|--------|---------|
+| `scroll` event fires | ✅ Yes (async, deferred) | ✅ Yes (sync) | ✅ Yes (sync) | ✅ Yes (sync) |
+| `scrollend` event fires | ✅ Yes (async, after scroll) | ✅ Yes | ✅ Yes | ✅ Yes |
+| Assignment during momentum kills inertia | ✅ Yes — scroll stops dead | N/A (no inertia) | N/A | N/A |
+| Assignment from `useLayoutEffect` (before paint) | Deferred — fires after React's commit phase | Synchronous | Synchronous | Synchronous |
+| Assignment from `ResizeObserver` callback | Deferred | Synchronous | Synchronous | Synchronous |
+
+**iOS Safari async scroll events are the key hazard.** When we set `scrollTop` programmatically, iOS queues the resulting `scroll` event and fires it later — sometimes after multiple subsequent React renders. This means any state that we update "after the programmatic scroll event" may run in the wrong order. In our implementation:
+- We set `programmaticScrollRef = true` before every programmatic `scrollTop` assignment.
+- The `handleScroll` listener checks this flag to distinguish our events from user-initiated ones.
+- `programmaticScrollRef` resets to `false` on `scrollend`, by which point all deferred events have fired.
+
+### `scrollend` event semantics
+
+`scrollend` has non-obvious behavior on iOS that shapes our scroll controller design.
+
+| Behavior | iOS Safari | macOS Safari | Chrome | Firefox |
+|---------|-----------|-------------|--------|---------|
+| Fires after momentum stops | ✅ | ✅ | ✅ | ✅ |
+| Fires when velocity reaches zero mid-gesture (direction reversal) | ✅ Yes — fires even with finger down | ❌ No | ❌ No | ❌ No |
+| Fires for programmatic `scrollTop` assignment | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
+| Reliable "scroll fully stopped" signal | ⚠️ No — may fire mid-gesture | ✅ Yes | ✅ Yes | ✅ Yes |
+
+**iOS `scrollend` mid-gesture**: when a user scrolls up then reverses direction without lifting the finger, the momentary velocity=0 fires `scrollend`. Without the `fingerDown` guard, this would prematurely unlock the virtual list range. Our fix: if `fingerDown === true` when `scrollend` fires, ignore it and wait for the real end-of-gesture.
+
+### ResizeObserver timing
+
+| Behavior | iOS Safari | macOS Safari | Chrome | Firefox |
+|---------|-----------|-------------|--------|---------|
+| Fires after layout (not before paint) | ✅ | ✅ | ✅ | ✅ |
+| `overflow-anchor` runs before ResizeObserver | N/A (no support) | N/A | ✅ Yes — scrollTop already corrected | ✅ Yes |
+| Multiple rapid resizes coalesce | Implementation-defined | Implementation-defined | Yes | Yes |
+
+**The Safari drift pattern**: on Chrome/Firefox, when a rendered item grows, the browser's `overflow-anchor` adjusts `scrollTop` during layout — before `ResizeObserver` fires. So by the time our ResizeObserver callback runs, `scrollTop` is already correct and our correction is a no-op. On Safari, no adjustment happens during layout, so our ResizeObserver compensation is the only correction.
+
+### What "user scroll intent" covers
+
+Our `userScrollIntent` ref is `true` during a window that we must not set `scrollTop`. Here is what that window covers on each platform:
+
+| Phase | iOS Safari | Chrome (mobile) | Desktop |
+|------|-----------|----------------|---------|
+| Finger touching screen | `fingerDown = true`, `userScrollIntent = true` | Same | N/A |
+| Momentum scroll (post-lift) | `userScrollIntent = true`, `fingerDown = false` | Same | N/A (wheel inertia is fine to interrupt) |
+| After `scrollend` + 150ms | `userScrollIntent = false` | Same | N/A |
+
+Setting `scrollTop` while `userScrollIntent === true` on mobile is safe only for emergency edge-expands (user will see blank space otherwise). All other corrections — `anchor:scrollBottom`, `anchor:contentResize`, prepend restore — are skipped when `userScrollIntent` is true.
 
 ## The estimate mismatch bug (2026-03)
 
