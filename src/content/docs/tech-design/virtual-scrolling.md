@@ -3,7 +3,7 @@ title: Virtual Scrolling
 description: Technical design for the virtual scrolling system
 ---
 
-> Last edit: 2026-03-06
+> Last edit: 2026-03-08
 
 ## How virtual lists work
 
@@ -41,7 +41,7 @@ The insight: freezing works for 95% of scrolls. The buffer is large enough that 
 
 **Near the buffer edge**: if the viewport gets within ~1 screen of the boundary, break the freeze and expand (add items, never remove). There may be a brief jitter, but the user was about to see blank space — jitter is the lesser evil.
 
-**On idle**: once `scrollend` fires and momentum stops, update the range normally. Expand to cover the new position, shrink lazily to reclaim DOM nodes.
+**On idle**: once `scrollend` fires and momentum stops, update the range normally. Expand to cover the new position, shrink lazily to reclaim DOM nodes. A manual scroll anchor prevents visual jumps (see below).
 
 ```
               ┌─── buffer (~5 screens) ────────────────┐
@@ -76,7 +76,7 @@ All values are in **pixels**. Item counts are meaningless when items range from 
 A scroll controller tracks whether the human or the code is driving the scroll. This matters because a `ResizeObserver` watching content growth should auto-scroll to the bottom — but only when the user isn't actively scrolling.
 
 ```
-idle ──touch/wheel──► user ──scrollend──► idle
+idle ──touch/wheel──► user ──scrollend (finger up)──► idle
 idle ──scrollToBottom()──► programmatic ──scrollend──► idle
 ```
 
@@ -85,6 +85,15 @@ Three signals:
 - **`userScrollIntent`** — `true` from first touch through the end of momentum. The virtual list freezes while this is `true`.
 - **`fingerDown`** — `true` only while the finger is physically on screen. An absolute lock: nothing programmatic can touch the scroll position.
 - **`phase`** — `idle`, `user`, or `programmatic`. The `ResizeObserver` can only auto-scroll during `idle`.
+
+### Mid-gesture scrollend
+
+iOS Safari fires `scrollend` whenever scroll velocity reaches zero — including **during** a touch gesture when the user reverses direction. Without handling this, the scroll controller would reset to idle while the finger is still on screen, breaking the gesture.
+
+**Fix**: if `fingerDown` is true when `scrollend` fires, ignore it. The real finalization happens later:
+
+- **If momentum follows**: scroll events keep firing, eventually a real `scrollend` fires with `fingerDown === false`.
+- **If no momentum**: a 150ms safety timer after `touchend` detects that no scroll events came, and finalizes to idle manually.
 
 ## When new data arrives at the top
 
@@ -105,6 +114,60 @@ Items render in normal document flow with two spacers:
 ```
 
 No absolute positioning, no per-item measurement. On Chrome and Firefox, browser scroll anchoring handles height mismatches automatically. On Safari, the freeze strategy sidesteps the problem entirely. The tradeoff: spacer heights are estimates, so the scrollbar thumb position isn't perfectly accurate — but for a chat interface, nobody notices.
+
+## Manual scroll anchoring (2026-03)
+
+When the range unfreezes after momentum ends, `startIndex` may change — items are added or removed above the viewport, and the top spacer resizes. Because spacer heights are estimates and real item heights vary, a spacer-to-item swap almost always produces a height mismatch. On Chrome/Firefox, `overflow-anchor` silently compensates. On Safari, the content jumps.
+
+### How it works
+
+Before any range change that moves `startIndex`, we capture an **anchor**: a visible DOM element near the viewport center, plus its current offset from the top of the scroll container (via `getBoundingClientRect`). Each rendered item carries a `data-vi` (virtual index) attribute, so the anchor lookup is a single `querySelector`.
+
+After React commits the DOM change, a `useLayoutEffect` (runs before paint) finds the same element, measures its new offset, and adjusts `scrollTop` by the drift. The element survives the range change because React reuses it via its stable `key`.
+
+```
+Before:                         After:
+┌─────────────┐                ┌─────────────┐
+│ top spacer  │ 4440px         │ top spacer  │ 2520px
+├─────────────┤                ├─────────────┤
+│ item 37     │                │ item 21     │  ← new items
+│ item 38     │                │ ...         │
+│ ...         │                │ item 37     │
+│ ★ item 57  │ ← anchor       │ item 38     │
+│ ...         │                │ ...         │
+│ item 128    │                │ ★ item 57  │ ← same element
+├─────────────┤                │ ...         │
+│ bot spacer  │                │ item 128    │
+└─────────────┘                ├─────────────┤
+                               │ bot spacer  │
+scrollTop: 6873                └─────────────┘
+
+                               scrollTop: 6873 + drift
+                               (★ stays at same viewport offset)
+```
+
+### Why element-based, not height-delta
+
+An earlier approach snapshotted `scrollHeight` before the change and adjusted `scrollTop` by the delta afterward. This is mathematically correct — but on iOS Safari, setting `scrollTop` in a layout effect still produces a visible frame of the wrong position. The element-based approach produces identical results but is more robust: it measures actual element positions, not estimated spacer arithmetic.
+
+### When anchoring is skipped
+
+During momentum scroll (`userScrollIntent === true`), anchoring is skipped entirely. Setting `scrollTop` would kill iOS momentum — the same constraint that motivated the freeze strategy. The content may briefly show at the wrong position, but momentum continues naturally. This only happens during emergency edge-expand (rare), not during normal frozen scrolling.
+
+### Use cases and expected behavior
+
+| Scenario | What happens | Anchor? | Expected result |
+|----------|-------------|---------|-----------------|
+| **Normal swipe + momentum** | Range frozen during scroll. No DOM changes. | No | Perfectly smooth, no jitter |
+| **Momentum ends (scrollend)** | Range unfreezes. `startIndex` may change (items added/removed above). | Yes | Anchor element stays at same viewport offset. No visible jump. |
+| **Long swipe hits buffer edge** | Emergency expand adds items (never removes). `startIndex` decreases. | Yes (if `startIndex` changes) | Brief possible jitter from expand, but anchor minimizes it. Momentum not killed. |
+| **Direction reversal mid-gesture** | Browser fires `scrollend` — ignored because `fingerDown` is true. Range stays frozen. | No | Scroll continues tracking finger without interruption |
+| **Finger lift, no momentum** | 150ms deferred finalize resets to idle. Range updates. | Yes | Anchor prevents jump. Happens after finger lift so no momentum to kill. |
+| **Finger lift, momentum follows** | Scroll events cancel deferred timer. Real `scrollend` fires after momentum. | Yes | Same as "momentum ends" — anchor after momentum is done. |
+| **Prepend (new data at top)** | Count changes, items shift. Detected in render phase. | No (uses height-delta) | `scrollTop` adjusted by `scrollHeight` delta. During momentum: skipped (content jumps but momentum preserved). |
+| **Idle range shrink** | Lazy cleanup removes items far from viewport. `startIndex` may increase. | Yes | Items removed from above → spacer grows. Anchor keeps position stable. |
+| **Content resize (streaming)** | `ResizeObserver` fires. `stickIfNeeded` may scroll to bottom. | No | Only acts when `shouldStick && !fingerDown && phase !== 'programmatic'`. |
+| **Desktop (Chrome/Firefox)** | Browser `overflow-anchor` handles everything natively. | Captured but drift is 0 | No adjustment needed. Anchor is a no-op. |
 
 ## The estimate mismatch bug (2026-03)
 

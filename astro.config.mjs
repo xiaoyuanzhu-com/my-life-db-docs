@@ -37,6 +37,7 @@ export default defineConfig({
 				{
 					label: 'Tech Design',
 					items: [
+						{ slug: 'tech-design/virtual-scrolling' },
 						{
 							label: 'Claude Code',
 							autogenerate: { directory: 'tech-design/claude-code' },
