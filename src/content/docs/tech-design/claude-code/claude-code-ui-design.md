@@ -1411,6 +1411,8 @@ Some message types are intentionally **not rendered** in the chat interface as s
 | `system.subtype: task_started` | Redundant with Task/Agent tool_use block — the tool header already shows the same description. Note: Claude Code renamed `Task` → `Agent`; both names are handled via fall-through in `tool-block.tsx`. |
 | `system.subtype: task_progress` | Rendered inside parent Task tool via `taskProgressMap`. Shows live subagent status (current activity + cumulative usage stats) while the Task is running. Filtered in `session-messages.tsx`. |
 | `type: "last-prompt"` | Session metadata — stores the last user prompt text for session restoration. Internal bookkeeping, no user-facing value. |
+| `ToolSearch` tool_use block | Internal deferred-tool loading machinery. Filtered from assistant message tool_use extraction (same as `TaskOutput`). |
+| User `tool_result` + "Tool loaded." | User messages containing only `tool_result` blocks and "Tool loaded." text — the response to `ToolSearch`. Skipped via `isSkippedUserMessage()`. |
 
 **Progress Messages:**
 
