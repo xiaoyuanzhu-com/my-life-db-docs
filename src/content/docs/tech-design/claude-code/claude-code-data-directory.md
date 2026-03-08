@@ -2,7 +2,7 @@
 title: "Claude Code Data Directory"
 ---
 
-> Last edit: 2026-02-26
+> Last edit: 2026-03-08
 
 ## Overview
 
@@ -340,6 +340,7 @@ This is returned **exactly as-is** from the API, even though the `SummarySession
 | `agent-name` | ❌ | Subagent name assignment |
 | `queue-operation` | ❌ | Internal queue management |
 | `file-history-snapshot` | ❌ | File version tracking |
+| `last-prompt` | ❌ | Session metadata: stores last user prompt text |
 | `rate_limit_event` | ❌ | Rate limit status from Claude API (stdout only, not persisted) |
 | `control_cancel_request` | ❌ | Cancels a pending request (e.g., user pressed Escape). Contains only `request_id`. Not displayed. |
 

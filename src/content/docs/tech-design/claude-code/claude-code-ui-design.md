@@ -2,7 +2,7 @@
 title: "Claude Code UI Design"
 ---
 
-> Last edit: 2026-02-26
+> Last edit: 2026-03-08
 
 ## 1. Core Design Philosophy: "Fluid Terminal"
 
@@ -1410,6 +1410,7 @@ Some message types are intentionally **not rendered** in the chat interface as s
 | `parent_tool_use_id` set | Subagent messages - rendered inside parent Task/Agent tool, not as top-level messages. See [claude-code-data-directory.md "Subagent Message Hierarchy"](./claude-code-data-directory.md#subagent-message-hierarchy--critical). |
 | `system.subtype: task_started` | Redundant with Task/Agent tool_use block — the tool header already shows the same description. Note: Claude Code renamed `Task` → `Agent`; both names are handled via fall-through in `tool-block.tsx`. |
 | `system.subtype: task_progress` | Rendered inside parent Task tool via `taskProgressMap`. Shows live subagent status (current activity + cumulative usage stats) while the Task is running. Filtered in `session-messages.tsx`. |
+| `type: "last-prompt"` | Session metadata — stores the last user prompt text for session restoration. Internal bookkeeping, no user-facing value. |
 
 **Progress Messages:**
 
