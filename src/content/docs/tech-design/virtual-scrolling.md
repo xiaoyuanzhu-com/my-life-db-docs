@@ -3,7 +3,7 @@ title: Virtual Scrolling
 description: Technical design for the virtual scrolling system
 ---
 
-> Last edit: 2026-03-08 (updated platform behaviors reference)
+> Last edit: 2026-03-09 (anchor feedback loop fix, touch intent for stickIfNeeded)
 
 ## Scroll UX contract
 
@@ -160,10 +160,11 @@ idle ──touch/wheel──► user ──scrollend (finger up)──► idle
 idle ──scrollToBottom()──► programmatic ──scrollend──► idle
 ```
 
-Three signals:
+Four signals:
 
 - **`userScrollIntent`** — `true` from first touch through the end of momentum. The virtual list freezes while this is `true`.
 - **`fingerDown`** — `true` only while the finger is physically on screen. An absolute lock: nothing programmatic can touch the scroll position.
+- **`touchIntent`** — `true` when the current scroll session started from a touch gesture (not wheel). Distinguishes touch momentum (unsafe to interrupt with programmatic `scrollTop`) from wheel/trackpad momentum (safe to interrupt). Set `true` by `touchstart`/`pointerdown`, `false` by `wheel`, cleared on `scrollend`.
 - **`phase`** — `idle`, `user`, or `programmatic`. The `ResizeObserver` can only auto-scroll during `idle`.
 
 ### Mid-gesture scrollend
@@ -271,7 +272,7 @@ During momentum scroll (`userScrollIntent === true`), anchoring is skipped entir
 | **Finger lift, momentum follows** | Scroll events cancel deferred timer. Real `scrollend` fires after momentum. | scrollBottom (if top changes) | Same as "momentum ends". |
 | **Prepend (new data at top)** | Count changes, items shift. Detected in render phase. | Height-delta | `scrollTop` adjusted by `scrollHeight` delta. During momentum: skipped (content jumps but momentum preserved). |
 | **Idle range shrink** | Removes items from one side only. | None | Top shrink: scrollTop already correct. Bottom shrink: no effect on viewport. |
-| **Content resize (streaming)** | `ResizeObserver` fires. `stickIfNeeded` may scroll to bottom. | None | Only acts when `shouldStick && !fingerDown && phase !== 'programmatic'`. |
+| **Content resize (streaming)** | `ResizeObserver` fires. `stickIfNeeded` may scroll to bottom. | None | Only acts when `shouldStick && !fingerDown && !(userScrollIntent && touchIntent) && phase !== 'programmatic'`. |
 | **Desktop (Chrome/Firefox)** | Browser `overflow-anchor` handles everything natively. | scrollBottom captured but adjustment is 0 | No adjustment needed. |
 
 ## Platform behaviors reference (2026-03)
@@ -302,7 +303,8 @@ Setting `el.scrollTop = X` from JavaScript has platform-specific side effects th
 
 **iOS Safari async scroll events are the key hazard.** When we set `scrollTop` programmatically, iOS queues the resulting `scroll` event and fires it later — sometimes after multiple subsequent React renders. This means any state that we update "after the programmatic scroll event" may run in the wrong order. In our implementation:
 - We set `programmaticScrollRef = true` before every programmatic `scrollTop` assignment.
-- The `handleScroll` listener checks this flag to distinguish our events from user-initiated ones.
+- The `handleScroll` listener checks this flag to: (1) preserve `persistentAnchorRef` (don't clear it for our own scroll events), and (2) skip `updateRange` (prevents the anchor feedback loop — see Bug 2 below).
+- The `handleScrollEnd` listener also checks `programmaticScrollRef` to skip `updateRange` for scrollend events caused by anchor adjustments.
 - `programmaticScrollRef` resets to `false` on `scrollend`, by which point all deferred events have fired.
 
 ### `scrollend` event semantics
@@ -382,3 +384,121 @@ This ensures `rawStart` never exceeds the item count. When at the actual bottom 
 The CSS-based responsive layout (`hidden md:flex` / `flex md:hidden`) rendered **both** desktop and mobile `ChatInterface` simultaneously. Each opened its own WebSocket, loaded messages independently, doubling backend connections and SSE notifications. Fixed by adding a `useIsMobile()` hook to conditionally render only the visible branch.
 
 This was discovered first during debugging but was not the primary cause of the flashing — the virtualizer oscillation was.
+
+## Momentum and post-momentum bugs (2026-03-09)
+
+Three related bugs caused poor scroll behavior on iOS Safari. Each required a separate fix because they stem from different mechanisms, but they share a common theme: programmatic `scrollTop` assignments firing when they shouldn't.
+
+### Bug 1: First scroll always has no momentum
+
+**Symptom**: the very first scroll interaction after page load has no momentum — the scroll stops dead immediately after finger lift. Subsequent scrolls work normally.
+
+**UX violations**: B (no momentum after lift), E (jump during momentum).
+
+**Root cause**: `stickIfNeeded` fires during touch momentum and kills iOS inertia.
+
+When the user starts scrolling up from near the bottom (`distFromBottom < stickyThreshold`), the first scroll event sets `shouldStick = true`. After finger lift (`fingerDown = false`), `ResizeObserver` fires (e.g., iOS Safari dynamic viewport resizing as the browser chrome shows/hides). `stickIfNeeded` runs its guard:
+
+```js
+// Old guard — no touch momentum check
+if (phase === 'programmatic' || fingerDown || !shouldStick) return
+```
+
+During touch momentum: `phase = 'user'`, `fingerDown = false`, `shouldStick = true` — all guards pass. `stickIfNeeded` calls `scrollToBottom('instant')`, which sets `scrollTop`, which kills iOS inertia.
+
+On subsequent scrolls, `shouldStick` is already `false` (the user scrolled further up), so the guard blocks. That's why only the first scroll is affected.
+
+**Fix**: add `touchIntent` ref to distinguish touch momentum from wheel/trackpad momentum. `stickIfNeeded` blocks when `userScrollIntent && touchIntent` (touch momentum — programmatic `scrollTop` would kill inertia) but still fires when `userScrollIntent && !touchIntent` (wheel/trackpad momentum — safe to interrupt, and desirable for following new content during streaming).
+
+```js
+// New guard
+if (phase === 'programmatic' || fingerDown ||
+    (userScrollIntent && touchIntent) || !shouldStick) return
+```
+
+**Why not just block on `userScrollIntent`?** On desktop, when the user is at the bottom and wheel-scrolling, `stickIfNeeded` needs to fire during wheel momentum to follow streaming content. Wheel inertia is safe to interrupt — there's no touch-based inertia to kill. Blocking on `userScrollIntent` alone would break the desktop streaming experience.
+
+### Bug 2: Anchor feedback loop — multi-jump after momentum end
+
+**Symptom**: visible multi-jump (3+ rapid `scrollTop` snaps) when momentum ends on iOS Safari. The scroll position bounces through several values before settling.
+
+**UX violations**: F (jump after momentum).
+
+**Root cause**: on iOS Safari, each anchor `scrollTop` adjustment fires a deferred `scroll` event, which triggers `updateRange`, which computes a slightly different range, which triggers another anchor adjustment — a feedback loop that converges in 3+ visible jumps.
+
+The sequence after momentum ends:
+
+```
+scrollend (real) → updateRange → expand [38,129)→[26,129)
+  → anchor adjusts scrollTop (jump 1: 8542→8366)
+  → iOS fires deferred scroll event
+  → updateRange → expand [26,129)→[24,129)
+    → anchor adjusts scrollTop (jump 2: 8366→8255)
+    → iOS fires deferred scroll event
+    → updateRange → expand [24,129)→[23,129)
+      → anchor adjusts scrollTop (jump 3: 8255→8179)
+```
+
+Each cycle: anchor changes `scrollTop` → `calcRange` computes a different `startIndex` (because item heights differ from estimates) → another expand → another anchor. The loop converges because each adjustment is smaller, but 3+ visible jumps is unacceptable.
+
+**Why this doesn't happen on desktop**: Chrome/Firefox fire `scroll` events synchronously for programmatic `scrollTop` assignments. By the time the event handler runs, the DOM is already committed and `calcRange` sees the final state. iOS defers the event, so the handler runs in a separate microtask after further DOM changes have occurred.
+
+**Fix**: skip `updateRange` for scroll and scrollend events that originate from anchor adjustments. The `programmaticScrollRef` flag (already set before every anchor `scrollTop` assignment) now also gates `updateRange`:
+
+```js
+const handleScroll = () => {
+  if (!programmaticScrollRef.current) {
+    persistentAnchorRef.current = null
+    updateRange()  // only for real user scrolls
+  }
+}
+const handleScrollEnd = () => {
+  const wasProgrammatic = programmaticScrollRef.current
+  programmaticScrollRef.current = false
+  if (!wasProgrammatic) {
+    updateRange()  // only for real scrollend
+  }
+}
+```
+
+After this fix, momentum end produces one expand + one anchor adjustment. The range may be 2–3 items short of the ideal overscan, but with 5400px of buffer this is invisible. The range corrects on the next user scroll.
+
+### Bug 3: Stale persistent anchor — double-jump during multi-cycle expand
+
+**Symptom**: during post-momentum range expansion, `scrollTop` jumps in the wrong direction briefly before correcting — a visible oscillation.
+
+**UX violations**: F (jump after momentum).
+
+**Root cause**: `persistentAnchorRef` (used by `anchor:contentResize`) goes stale when a new expand cycle starts before the previous cycle's `useLayoutEffect` updates it.
+
+The sequence:
+
+```
+Cycle 1: captureScrollBottom(scrollBottom=12096)
+  → render → useLayoutEffect sets persistentAnchorRef = 12096
+
+Cycle 2: captureScrollBottom(scrollBottom=14253)  ← anchorRef updated
+  → but persistentAnchorRef still = 12096  ← STALE
+  → contentResize fires → anchor:contentResize reads 12096 → wrong scrollTop
+  → useLayoutEffect fires → anchor:scrollBottom reads 14253 → corrects back
+```
+
+Two anchors (`anchor:contentResize` from ResizeObserver, `anchor:scrollBottom` from `useLayoutEffect`) fire for the same render cycle with different `scrollBottom` values. The contentResize anchor moves `scrollTop` in the wrong direction, then the scrollBottom anchor corrects it — a visible oscillation.
+
+**Fix**: update `persistentAnchorRef` in `captureScrollBottom` (not just in `useLayoutEffect`). This way, both anchors use the same `scrollBottom` target. The contentResize anchor either computes the same result as the scrollBottom anchor (no-op) or runs before it with the correct value:
+
+```js
+const captureScrollBottom = useCallback(() => {
+  const el = scrollElement.current
+  if (!el) return
+  const scrollBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+  anchorRef.current = { scrollBottom }
+  // Pre-update persistent anchor so contentResize uses the correct target.
+  // Skip during momentum (anchor:scrollBottom is also skipped then).
+  if (!userScrollIntent?.current) {
+    persistentAnchorRef.current = { scrollBottom }
+  }
+}, [scrollElement, userScrollIntent])
+```
+
+**Why skip during momentum?** During momentum, `anchor:scrollBottom` is skipped (setting `scrollTop` would kill inertia). If we set `persistentAnchorRef` but the scrollBottom anchor never fires to correct `scrollTop`, the persistent anchor would hold an incorrect value. After `scrollend`, the scrollBottom anchor fires normally and sets both `scrollTop` and `persistentAnchorRef` correctly.
