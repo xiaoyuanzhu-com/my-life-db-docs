@@ -25,7 +25,6 @@ graph LR
 | OpenAI | Completions, embeddings, vision | `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL` |
 | Qdrant | Vector similarity search | `QDRANT_HOST`, `QDRANT_API_KEY`, `QDRANT_COLLECTION` |
 | Meilisearch | Full-text keyword search | `MEILI_HOST`, `MEILI_API_KEY`, `MEILI_INDEX` |
-| HAID | OCR, document conversion, whisperx | `HAID_BASE_URL`, `HAID_API_KEY`, `HAID_CHROME_CDP_URL` |
 | Aliyun | Real-time speech recognition | (configured in settings) |
 
 ## OpenAI
@@ -180,69 +179,6 @@ type MeiliSearchResult struct {
     ID    string
     Score float32
     // ... matched document fields
-}
-```
-
-## HAID
-
-Custom service for document processing.
-
-### Configuration
-
-```bash
-HAID_BASE_URL=http://your-haid-server
-HAID_API_KEY=
-HAID_CHROME_CDP_URL=  # For screenshots
-```
-
-### Functions
-
-```go
-// backend/vendors/haid.go
-
-// Document to Markdown
-func HAIDDocToMarkdown(filePath string) (string, error)
-
-// OCR (image to text)
-func HAIDOCR(imagePath string) (string, error)
-
-// Object detection
-func HAIDDetectObjects(imagePath string) ([]HAIDObject, error)
-
-// Generate embeddings
-func HAIDEmbeddings(texts []string) ([][]float32, error)
-
-// Speech recognition (whisperx with diarization)
-func HAIDWhisperX(audioPath string) (*HAIDTranscript, error)
-
-// Take screenshot of URL
-func HAIDScreenshot(url string) ([]byte, error)
-
-// Take screenshot of document
-func HAIDDocScreenshot(filePath string) ([]byte, error)
-```
-
-### Types
-
-```go
-type HAIDObject struct {
-    Label      string  `json:"label"`
-    Confidence float32 `json:"confidence"`
-    BoundingBox struct {
-        X, Y, Width, Height int
-    } `json:"bounding_box"`
-}
-
-type HAIDTranscript struct {
-    Segments []HAIDSegment `json:"segments"`
-    Language string        `json:"language"`
-}
-
-type HAIDSegment struct {
-    Start   float64 `json:"start"`
-    End     float64 `json:"end"`
-    Text    string  `json:"text"`
-    Speaker string  `json:"speaker"`  // With diarization
 }
 ```
 

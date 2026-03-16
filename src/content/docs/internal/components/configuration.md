@@ -119,14 +119,6 @@ Paths are converted to absolute paths on load.
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | API base URL (for compatible APIs) |
 | `OPENAI_MODEL` | `gpt-4o-mini` | Model name |
 
-### HAID (Custom Services)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `HAID_BASE_URL` | - | HAID service URL |
-| `HAID_API_KEY` | - | HAID API key |
-| `HAID_CHROME_CDP_URL` | - | Chrome CDP URL for screenshots |
-
 ### Authentication
 
 | Variable | Default | Description |
