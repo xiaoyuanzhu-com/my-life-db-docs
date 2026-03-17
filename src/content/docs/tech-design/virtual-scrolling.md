@@ -3,7 +3,7 @@ title: Virtual Scrolling
 description: Technical design for the virtual scrolling system
 ---
 
-> Last edit: 2026-03-09 (anchor feedback loop fix, touch intent for stickIfNeeded)
+> Last edit: 2026-03-17 (persistent anchor expiry + getKey stabilization for live sessions)
 
 ## Scroll UX contract
 
@@ -502,3 +502,106 @@ const captureScrollBottom = useCallback(() => {
 ```
 
 **Why skip during momentum?** During momentum, `anchor:scrollBottom` is skipped (setting `scrollTop` would kill inertia). If we set `persistentAnchorRef` but the scrollBottom anchor never fires to correct `scrollTop`, the persistent anchor would hold an incorrect value. After `scrollend`, the scrollBottom anchor fires normally and sets both `scrollTop` and `persistentAnchorRef` correctly.
+
+## Live session scroll jump (2026-03-17)
+
+### Symptom
+
+On sessions with live updates (streaming, tool execution), scrolling up to read older messages causes erratic jumps — the viewport suddenly shifts to a different position or jumps to the top of the conversation. Only affects in-progress sessions; completed sessions scroll perfectly.
+
+### Root cause 1: persistent anchor fights streaming content
+
+`persistentAnchorRef` was designed to compensate for spacer→item height settling on Safari after `startIndex` changes. It stores a target `scrollBottom` and the content `ResizeObserver` reapplies it whenever content height changes. The problem: it had no expiry.
+
+During a live session:
+
+1. User scrolls up and stops → `scrollend` fires → `updateRange` runs → `startIndex` changes → `persistentAnchorRef` is set with current `scrollBottom`
+2. Content below the viewport keeps changing (streaming response grows, new messages arrive)
+3. Each content height change triggers the `ResizeObserver`, which adjusts `scrollTop` to maintain the captured `scrollBottom`
+
+The math: `newScrollTop = scrollHeight - clientHeight - scrollBottom`. When content grows below, `scrollHeight` increases while `scrollBottom` stays constant, so `scrollTop` increases — the user gets pushed **down** through the content. When streaming ends and content shrinks (streaming response → finalized message), `scrollTop` snaps back **up**.
+
+The anchor was only needed for ~100-200ms while newly-rendered items settle to their real heights. After that, any content changes are unrelated to the range change that created the anchor.
+
+### Root cause 2: count-change effect fires on every messages update
+
+The `useVirtualList` count-change effect depended on `getKey`:
+
+```js
+const getKey = useCallback(
+  (index) => filteredMessages[index]?.uuid ?? index,
+  [filteredMessages],  // new ref on every messages prop change
+)
+
+useLayoutEffect(() => {
+  // ... range adjustment logic
+}, [count, getKey, ...])  // fires when getKey identity changes
+```
+
+`filteredMessages` gets a new reference on every `messages` prop change (even when the filtered result is identical). This gave `getKey` a new identity, which triggered the count-change effect on every WebSocket message arrival — not just when `count` actually changed.
+
+While the effect body handled this correctly most of the time (preserving `startIndex` when `shouldStick` is false), the unnecessary executions created timing windows for interaction with other state changes.
+
+### Fix 1: element-based persistent anchor
+
+The persistent anchor changes from scrollBottom-based to element-based. Instead of storing a target `scrollBottom` (which is sensitive to ALL content height changes), it stores a **visible DOM element's viewport offset**.
+
+After the primary scrollBottom anchor fires in the layout effect, `captureElementAnchor()` finds the element nearest the viewport center and records its offset from the scroll container:
+
+```js
+const captureElementAnchor = useCallback(() => {
+  const el = scrollElement.current
+  if (!el) return
+  const containerRect = el.getBoundingClientRect()
+  const viewportCenterY = containerRect.top + el.clientHeight / 2
+  const items = el.querySelectorAll('[data-vi]')
+  let best: Element | null = null
+  let bestDist = Infinity
+  for (const item of items) {
+    const rect = item.getBoundingClientRect()
+    const center = rect.top + rect.height / 2
+    const dist = Math.abs(center - viewportCenterY)
+    if (dist < bestDist) { bestDist = dist; best = item }
+  }
+  if (best) {
+    persistentAnchorRef.current = {
+      vi: best.getAttribute('data-vi')!,
+      offset: best.getBoundingClientRect().top - containerRect.top,
+    }
+  }
+}, [scrollElement])
+```
+
+The content `ResizeObserver` then measures drift and corrects:
+
+```js
+const item = el.querySelector(`[data-vi="${pa.vi}"]`)
+const currentOffset = item.getBoundingClientRect().top - containerRect.top
+const drift = currentOffset - pa.offset
+if (Math.abs(drift) > 2) {
+  el.scrollTop += drift
+}
+```
+
+**Why this works:** items settling above the anchor element change its viewport offset → drift detected → corrected. Streaming content growing below the anchor element doesn't change its offset → drift = 0 → no correction. This is the same mechanism browser `overflow-anchor` uses natively — we're implementing it for Safari.
+
+`captureScrollBottom` is simplified: it only sets `anchorRef` for the one-shot layout effect. The element-based persistent anchor is captured after the primary anchor fires, so no pre-update is needed (eliminating the stale-anchor problem from Bug 3).
+
+User scroll events still clear the anchor immediately (existing behavior).
+
+### Fix 2: stabilize getKey via ref
+
+`getKey` is now stored in a ref (`getKeyRef`) that's updated every render. The count-change effect uses `getKeyRef.current` instead of `getKey`, removing `getKey` from the dependency array:
+
+```js
+const getKeyRef = useRef(getKey)
+getKeyRef.current = getKey
+
+useLayoutEffect(() => {
+  // ... uses getKeyRef.current instead of getKey
+  prevFirstKeyRef.current = count > 0 ? getKeyRef.current(0) : undefined
+}, [count, shouldStick, scrollElement, estimateSize, overscan])
+// getKey removed from deps — effect only fires when count changes
+```
+
+This eliminates ~25 unnecessary effect executions per second during streaming (one per buffer flush).
