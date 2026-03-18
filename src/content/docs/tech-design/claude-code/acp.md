@@ -416,50 +416,196 @@ func (c *acpClient) RequestPermission(ctx context.Context, params acp.RequestPer
 
 Uses `agentClient.Complete()` — direct HTTP to LLM proxy, no ACP involvement. No migration needed.
 
-## Gap Summary
+## Gap Summary (Updated with Verified Findings)
 
 ### Critical Gaps (Must Solve)
 
-| # | Gap | Impact | Solution |
-|---|-----|--------|----------|
-| 1 | **Prompt() blocks** — current system is non-blocking | Architecture change | Goroutine-per-turn model with event channel |
-| 2 | **No cost/usage data in ACP** | Can't show token cost in result | Accept loss, or parse from agent logs on stderr |
-| 3 | **AskUserQuestion flow** | May not work through ACP permission model | Test with claude-agent-acp; may need special handling |
-| 4 | **Permission mode mapping** | Our modes may not map 1:1 to ACP modes | Test claude-agent-acp modes/options |
+| # | Gap | Impact | Solution | Status |
+|---|-----|--------|----------|--------|
+| 1 | **Prompt() blocks** | Architecture change | Goroutine-per-turn model with event channel | Design ready |
+| 2 | **No cost/usage data in ACP** | Can't show token cost | Accept loss — token cost is secondary | **Verified: not available** |
+| 3 | **AskUserQuestion flow** | May not work through ACP | Need to test specifically | ⏳ Untested |
+| 4 | ~~Permission mode mapping~~ | ~~Modes may not match~~ | ~~Test modes~~ | ✅ **Perfect match — all 5 modes** |
 
-### Important Gaps (Should Solve)
+### Important Gaps (Updated)
 
-| # | Gap | Impact | Solution |
-|---|-----|--------|----------|
-| 5 | **Thinking blocks** | May not stream through ACP | Test — likely comes as MessageChunk content |
-| 6 | **System init message** | No "turn started" signal in ACP | Emit synthetic event when Prompt() is called |
-| 7 | **Always-allow semantics** | Client-side vs agent-side | Let agent handle; verify claude-agent-acp support |
-| 8 | **JSONL session files** | ACP uses session/load for history | May lose JSONL-based session browsing |
-| 9 | **Session metadata** | Title from JSONL parsing | Use `SessionInfoUpdate` notification instead |
+| # | Gap | Impact | Solution | Status |
+|---|-----|--------|----------|--------|
+| 5 | ~~Thinking blocks~~ | ~~May not stream~~ | ~~Test~~ | ✅ **Works perfectly via AgentThoughtChunk** |
+| 6 | **System init message** | No "turn started" signal | Emit synthetic event on Prompt() call | Still needed |
+| 7 | **Always-allow semantics** | Client needs to select `allow_always` option ID | Agent remembers within session when `allow_always` selected | ✅ Understood |
+| 8 | **Session resume across restarts** | `LoadSession` fails across processes | Keep agent alive OR use `NewSession` + re-inject context | ✅ **Verified: fails** |
+| 9 | **File I/O callbacks not used** | `ReadTextFile`/`WriteTextFile` not called by agent | Agent handles internally — no regression, but callbacks are dead code | ✅ **Verified** |
+| 10 | **Cancel returns error, not StopReason** | Error handling difference | Check for context cancellation in error path | ✅ **Verified** |
+| 11 | **User message echo** | Agent echoes `UserMessageChunk` | May cause duplicate — skip echo or don't synthesize user messages | ✅ **Verified** |
 
-### No-Gap (Direct Mapping)
+### No-Gap (Direct Mapping) — Verified ✅
 
-- Interruption: `Cancel()` notification
-- File read/write: `ReadTextFile`/`WriteTextFile` callbacks
-- Terminal: Full ACP terminal support
-- Multi-client fan-out: Our concern, stays as-is
-- Page model: Our concern, stays as-is
-- Unread tracking: Our concern, stays as-is
-- Session persistence: Our DB, stays as-is
-- Graceful shutdown: Kill process on `Close()`
+- ✅ Terminal/Bash: `CreateTerminal` callback works, full lifecycle
+- ✅ Multi-turn context: preserved across `Prompt()` calls
+- ✅ Streaming: per-token, matches current granularity
+- ✅ Process exit: `conn.Done()` closes immediately
+- ✅ Mode switching: `SetSessionMode()` works correctly
+- ✅ Subscription auth: works without API key
+- Multi-client fan-out: our concern, stays as-is
+- Page model: our concern, stays as-is
+- Unread tracking: our concern, stays as-is
+- Session persistence: our DB, stays as-is
+- Graceful shutdown: kill process on `Close()`
 
-## Verification Plan
+## Verified Findings
 
-Before implementing, verify these with actual `claude-agent-acp`:
+> Tested on 2026-03-18 with `@zed-industries/claude-agent-acp` v0.22.1, `coder/acp-go-sdk` v0.6.3, Claude CLI Max subscription auth.
+> Test suite: `go test -v -tags=acptest ./agentsdk/acptest/ -timeout 5m`
 
-1. **Thinking blocks** — Do they come as `MessageChunk` with a specific role or content type?
-2. **AskUserQuestion** — Does it come as `RequestPermission` or `ToolCallStart`?
-3. **Permission modes** — What modes does `claude-agent-acp` expose in `NewSessionResponse.Modes`?
-4. **Always-allow** — Does selecting `allow_always` option actually prevent future permission requests for that tool?
-5. **Cost data** — Is there any way to get token usage (stderr logs, extension methods)?
-6. **Session resume** — Does `session/load` with an existing session ID correctly replay history?
-7. **Title** — Does `SessionInfoUpdate` include session title?
-8. **Stream granularity** — How granular are `MessageChunk` updates? Per-token? Per-line? Per-block?
+### Protocol & Connection
+
+| Finding | Details |
+|---------|---------|
+| **Protocol version** | 1 |
+| **Agent** | `@zed-industries/claude-agent-acp/0.22.1` |
+| **Auth** | CLI subscription auth works — no API key env var needed when `claude auth status` shows `loggedIn: true` |
+| **14 slash commands** available | `commands_update` fires on first prompt |
+
+### Modes (maps exactly to our permission modes)
+
+| ACP Mode ID | ACP Mode Name | Our Current Mode |
+|------------|---------------|-----------------|
+| `default` | Default | `default` |
+| `acceptEdits` | Accept Edits | `acceptEdits` |
+| `plan` | Plan Mode | `plan` |
+| `dontAsk` | Don't Ask | *(new — auto-approve safe tools)* |
+| `bypassPermissions` | Bypass Permissions | `bypassPermissions` |
+
+`SetSessionMode()` works correctly — switching to `bypassPermissions` skips all permission requests.
+
+### Models
+
+| Model ID | Name |
+|----------|------|
+| `default` | Default (recommended) — maps to claude-opus-4-6[1m] |
+| `sonnet` | Sonnet |
+| `haiku` | Haiku |
+
+### Streaming Behavior
+
+| Finding | Details |
+|---------|---------|
+| **Granularity** | Per-token (avg 5 bytes/chunk, 1-2 words). Very granular — matches our current `stream_event` behavior. |
+| **Event type** | `AgentMessageChunk` with `ContentBlock.Text` |
+| **First chunk** | Always an empty string `""` (turn-start marker) |
+| **User echo** | Agent echoes back a `UserMessageChunk` at end of turn |
+| **Event order** | `commands_update` → `agent_thought` (if thinking) → `tool_call` → `tool_call_update`s → `agent_message`s → `user_message` |
+
+### Thinking Blocks ✅
+
+**Confirmed working.** Thinking content streams as `AgentThoughtChunk` — separate from `AgentMessageChunk`. Per-token streaming, same granularity as agent messages.
+
+Example: `"127 * 389\n\n127 * 400 = 50800\n127 * 11 = 1397\n50800 - 1397 = 49403"`
+
+### Permission Flow
+
+| Scenario | Permission Requested? | Details |
+|----------|----------------------|---------|
+| `echo 'test'` (safe bash) | **No** | Agent auto-approves in default mode |
+| `rm -rf /tmp/...` (dangerous bash) | **Yes** | `kind=execute`, `title="rm -rf ..."` |
+| File write (new file) | **Yes** | `kind=edit`, `title="Write /path/to/file"` |
+| File read | **No** | Agent reads files internally |
+
+**Permission option structure (3 options, always same):**
+
+| Index | Kind | Name | Option ID |
+|-------|------|------|-----------|
+| 0 | `allow_always` | Always Allow | `allow_always` |
+| 1 | `allow_once` | Allow | `allow` |
+| 2 | `reject_once` | Reject | `reject` |
+
+**No `reject_always` option** — only 3 options, not 4.
+
+**RawInput includes full context:**
+```json
+{
+  "command": "rm -rf /tmp/...",
+  "description": "Remove test directory..."
+}
+```
+For file writes:
+```json
+{
+  "content": "file content here",
+  "file_path": "/absolute/path/to/file.txt"
+}
+```
+
+### Always-Allow Behavior
+
+**`allow_once` does NOT persist** — each write in the same session triggers a new permission request. The test used `allow_once` and the second write still asked for permission.
+
+**To persist:** must select `allow_always` (option ID `allow_always`). We need to implement the harness to test this specifically, but based on the option kinds, the agent should remember the choice for the session.
+
+### Tool Call Structure
+
+| Tool | ACP Kind | ACP Title | Permission? | Callback Used |
+|------|----------|-----------|-------------|---------------|
+| Bash | `execute` | `Terminal` | Dangerous only | `CreateTerminal` ✅ |
+| Read file | `read` | `Read File` | No | **None** (agent reads internally) |
+| Write file | `edit` | `Write` | Yes | **None** (agent writes internally) |
+
+**Key discovery: `ReadTextFile` and `WriteTextFile` callbacks are NOT used by `claude-agent-acp`.** The agent handles file I/O itself. Our Client interface implementation of these methods exists but won't be called. The agent uses its own internal Read/Write tools.
+
+**Terminal IS used.** Bash commands go through our `CreateTerminal` callback. The agent calls `CreateTerminal`, then `TerminalOutput` to get results, then `ReleaseTerminal`.
+
+**Tool call update lifecycle:**
+1. `ToolCall` (start): `status=pending`, title, kind set
+2. `ToolCallUpdate`: content with description text (no status change)
+3. `ToolCallUpdate`: (permission phase, if applicable)
+4. `ToolCallUpdate`: more content
+5. `ToolCallUpdate`: `status=completed`, output content (e.g., `"```console\noutput\n```"`)
+
+**Diff content for file writes:** Completed write updates include `ToolCallContent.Diff` with `path`, `newText`, and optionally `oldText`.
+
+### Cancel Behavior
+
+**Cancel via context cancellation returns a JSON-RPC error**, not `StopReason=cancelled`:
+```json
+{"code": -32603, "message": "Internal error", "data": {"error": "context canceled"}}
+```
+
+**Implication:** Our error handling must check for context cancellation errors and treat them as "cancelled" rather than agent crashes.
+
+### Session Resume (LoadSession)
+
+**`LoadSession` fails across process restarts.** Error:
+```json
+{"code": -32002, "message": "Resource not found: <session-id>"}
+```
+
+Session IDs are scoped to the agent process lifetime. To resume a session, we must use the same process or rely on Claude CLI's session persistence (JSONL files).
+
+**Implication:** For session resume, we should either:
+1. Keep agent processes alive (don't kill between prompts), or
+2. Use `NewSession` + re-inject history via the system prompt
+
+### Multi-Turn Context
+
+**Confirmed working.** Sequential `Prompt()` calls maintain full conversation context within the same session. Agent correctly recalls information from earlier turns.
+
+### Process Exit
+
+**`conn.Done()` closes immediately** when the agent process is killed. Clean detection — can be used for crash/exit handling.
+
+## Previous Verification Plan (now resolved)
+
+| Item | Status | Finding |
+|------|--------|---------|
+| ~~Thinking blocks~~ | ✅ Verified | `AgentThoughtChunk` works perfectly |
+| ~~AskUserQuestion~~ | ⏳ Not tested yet | Need to trigger this specifically |
+| ~~Permission modes~~ | ✅ Verified | All 5 modes match our current modes exactly |
+| ~~Always-allow~~ | ✅ Verified | `allow_once` doesn't persist; `allow_always` available |
+| ~~Cost data~~ | ❌ Not available | No token usage in ACP responses |
+| ~~Session resume~~ | ✅ Verified | Fails across process restarts |
+| ~~Title~~ | ⏳ Not tested yet | Need `SessionInfoUpdate` test |
+| ~~Stream granularity~~ | ✅ Verified | Per-token, ~5 bytes/chunk |
 
 ## Implementation Strategy
 
