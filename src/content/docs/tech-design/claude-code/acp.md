@@ -3,6 +3,8 @@ title: ACP Migration — Zero-Regression Analysis
 description: Comprehensive analysis of migrating from the custom Claude Code SDK to ACP (Agent Client Protocol), mapping every flow and identifying all gaps.
 ---
 
+> Last edit: 2026-03-20
+
 ## Overview
 
 This document analyzes migrating MyLifeDB's Claude Code integration from the current custom SDK (`backend/claude/sdk/`) to [ACP (Agent Client Protocol)](https://agentclientprotocol.com) via [coder/acp-go-sdk](https://github.com/coder/acp-go-sdk) and [claude-agent-acp](https://github.com/zed-industries/claude-agent-acp).
@@ -424,7 +426,7 @@ Uses `agentClient.Complete()` — direct HTTP to LLM proxy, no ACP involvement. 
 |---|-----|--------|----------|--------|
 | 1 | **Prompt() blocks** | Architecture change | Goroutine-per-turn model with event channel | Design ready |
 | 2 | **No cost/usage data in ACP** | Can't show token cost | Accept loss — token cost is secondary | **Verified: not available** |
-| 3 | **AskUserQuestion flow** | May not work through ACP | Need to test specifically | ⏳ Untested |
+| 3 | **AskUserQuestion flow** | Tool not available via ACP | Agent asks as plain text — acceptable fallback | ✅ **Verified: not available** |
 | 4 | ~~Permission mode mapping~~ | ~~Modes may not match~~ | ~~Test modes~~ | ✅ **Perfect match — all 5 modes** |
 
 ### Important Gaps (Updated)
@@ -434,7 +436,7 @@ Uses `agentClient.Complete()` — direct HTTP to LLM proxy, no ACP involvement. 
 | 5 | ~~Thinking blocks~~ | ~~May not stream~~ | ~~Test~~ | ✅ **Works perfectly via AgentThoughtChunk** |
 | 6 | **System init message** | No "turn started" signal | Emit synthetic event on Prompt() call | Still needed |
 | 7 | **Always-allow semantics** | Client needs to select `allow_always` option ID | Agent remembers within session when `allow_always` selected | ✅ Understood |
-| 8 | **Session resume across restarts** | `LoadSession` fails across processes | Keep agent alive OR use `NewSession` + re-inject context | ✅ **Verified: fails** |
+| 8 | **Session resume across restarts** | `LoadSession` fails across processes. Works within same process. SDK lacks unstable `session/resume`. | Keep agent alive OR use `NewSession` + re-inject context | ✅ **Verified: fails across restart, works in-process** |
 | 9 | **File I/O callbacks not used** | `ReadTextFile`/`WriteTextFile` not called by agent | Agent handles internally — no regression, but callbacks are dead code | ✅ **Verified** |
 | 10 | **Cancel returns error, not StopReason** | Error handling difference | Check for context cancellation in error path | ✅ **Verified** |
 | 11 | **User message echo** | Agent echoes `UserMessageChunk` | May cause duplicate — skip echo or don't synthesize user messages | ✅ **Verified** |
@@ -575,16 +577,37 @@ For file writes:
 
 ### Session Resume (LoadSession)
 
+**Updated 2026-03-20 with expanded test coverage.**
+
+**`LoadSession` works within the same agent process:**
+- Switching to a new session and loading the original back succeeds
+- History replays as `SessionUpdate` notifications (user messages + agent messages + tool calls)
+- **Context is retained** — after loading, the agent recalls facts from prior turns
+- **Multi-turn history is fully replayed** — all turns of a 3-turn conversation replay, not just the last
+
 **`LoadSession` fails across process restarts.** Error:
 ```json
 {"code": -32002, "message": "Resource not found: <session-id>"}
 ```
 
-Session IDs are scoped to the agent process lifetime. To resume a session, we must use the same process or rely on Claude CLI's session persistence (JSONL files).
+Session IDs are scoped to the agent process lifetime. The ACP Go SDK v0.6.3 does **not** expose `session/resume`, `session/list`, or `session/fork` — these "unstable" methods from the spec are not yet implemented in the SDK.
 
 **Implication:** For session resume, we should either:
 1. Keep agent processes alive (don't kill between prompts), or
 2. Use `NewSession` + re-inject history via the system prompt
+
+### AskUserQuestion
+
+**Tested 2026-03-20: NOT available through ACP.**
+
+The `claude-agent-acp` binary does not expose `AskUserQuestion` as a tool. When explicitly asked to use it, the agent:
+1. Searches for it via `ToolSearch`
+2. Confirms it doesn't exist (only finds `ExitPlanMode` and `EnterPlanMode`)
+3. Falls back to asking the question as plain text in its response
+
+The ACP protocol has no "ask user" method. `RequestPermission` is approve/deny only — no input collection.
+
+**Practical impact is low.** The agent naturally asks clarifying questions in conversation text. The structured question-card UX from the old Claude Code SDK is lost, but the conversational flow works.
 
 ### Multi-Turn Context
 
@@ -599,11 +622,11 @@ Session IDs are scoped to the agent process lifetime. To resume a session, we mu
 | Item | Status | Finding |
 |------|--------|---------|
 | ~~Thinking blocks~~ | ✅ Verified | `AgentThoughtChunk` works perfectly |
-| ~~AskUserQuestion~~ | ⏳ Not tested yet | Need to trigger this specifically |
+| ~~AskUserQuestion~~ | ✅ Verified | **Not available** — agent has no `AskUserQuestion` tool via ACP. Falls back to plain text questions. |
 | ~~Permission modes~~ | ✅ Verified | All 5 modes match our current modes exactly |
 | ~~Always-allow~~ | ✅ Verified | `allow_once` doesn't persist; `allow_always` available |
 | ~~Cost data~~ | ❌ Not available | No token usage in ACP responses |
-| ~~Session resume~~ | ✅ Verified | Fails across process restarts |
+| ~~Session resume~~ | ✅ Verified | Works within same process. Fails across process restarts. SDK lacks `session/resume` unstable method. |
 | ~~Title~~ | ⏳ Not tested yet | Need `SessionInfoUpdate` test |
 | ~~Stream granularity~~ | ✅ Verified | Per-token, ~5 bytes/chunk |
 

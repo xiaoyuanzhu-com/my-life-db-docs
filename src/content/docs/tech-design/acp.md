@@ -3,7 +3,7 @@ title: Agent Client Protocol (ACP)
 description: How MyLifeDB uses ACP for AI agent integration
 ---
 
-> Last edit: 2026-03-19
+> Last edit: 2026-03-20
 
 ## Overview
 
@@ -200,9 +200,17 @@ The following behaviors are verified ground truth from our test suite, tested ag
 
 ### Session Resume
 
-- **`LoadSession` replays the entire conversation** as `SessionUpdate` notifications.
-- **All historical messages arrive BEFORE the `LoadSession` response** returns.
-- **`LoadSession` fails across process restarts.** Session IDs are scoped to the agent process lifetime. Spawning a new agent process and calling `LoadSession` with a previous session ID returns `Resource not found`.
+- **`LoadSession` works within the same agent process.** Switching away to a new session and loading the original back succeeds. History replays as `SessionUpdate` notifications (user messages + agent messages + tool calls).
+- **Context is retained after `LoadSession`.** After loading a session, the agent can recall facts from prior turns — the replayed history restores conversational context.
+- **Multi-turn history is fully replayed.** A 3-turn conversation replays all 3 turns (user messages + agent responses), not just the last.
+- **`LoadSession` fails across process restarts.** Session IDs are scoped to the agent process lifetime. Spawning a new agent process and calling `LoadSession` with a previous session ID returns error code `-32002` ("Resource not found").
+- **The ACP Go SDK v0.6.3 does NOT expose `session/resume`, `session/list`, or `session/fork`.** These "unstable" methods mentioned in the ACP protocol spec are not yet implemented in the SDK. Only `session/load` is available.
+
+### AskUserQuestion
+
+- **`AskUserQuestion` is NOT available through ACP.** The `claude-agent-acp` binary does not expose this tool. When prompted to use it, the agent searches for it via `ToolSearch`, confirms it doesn't exist, and falls back to asking questions as plain text in its response.
+- **The ACP protocol has no dedicated "ask user" method.** The only user-interaction callback is `RequestPermission`, which is approve/deny only — no input collection.
+- **Practical impact is low.** The agent naturally asks clarifying questions in its text response. The structured question-card UX from the old Claude Code SDK is lost, but the conversational flow still works.
 
 ## Our Integration
 
@@ -300,14 +308,9 @@ agentConfigs := map[string]AgentConfig{
 
 ### Unstable Methods
 
-Several methods are behind interface assertions and may change:
+The ACP protocol spec mentions several unstable methods (`session/resume`, `session/list`, `session/fork`). As of **Go SDK v0.6.3, none of these are implemented**. The SDK only exposes: `session/new`, `session/load`, `session/cancel`, `session/prompt`, `session/set_mode`, `session/set_model`.
 
-- `ListSessions` -- list all sessions in the agent
-- `ForkSession` -- create a branch of an existing session
-- `ResumeSession` -- resume a session (different from `LoadSession`)
-- `SetSessionModel` -- change the model mid-session
-
-These are accessible via `conn.(acp.UnstableClientSideConnection)` type assertions but should be used cautiously.
+`SetSessionModel` is the only "unstable" method that exists in the SDK, accessible as a regular method on `ClientSideConnection`.
 
 ### Session Resume Across Restarts
 
@@ -319,6 +322,10 @@ These are accessible via `conn.(acp.UnstableClientSideConnection)` type assertio
 ### No Cost/Usage Data
 
 ACP does not provide token usage or cost information in `PromptResponse`. Token cost tracking is not available through the protocol.
+
+### No AskUserQuestion
+
+The `claude-agent-acp` binary does not expose `AskUserQuestion` as a tool. The ACP protocol has no equivalent — `RequestPermission` is the only user-interaction callback, and it only supports approve/deny (no input collection). The agent asks clarifying questions as plain conversation text instead.
 
 ### Agent File I/O Callbacks Are Dead Code
 
