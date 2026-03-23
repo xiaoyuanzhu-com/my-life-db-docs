@@ -21,17 +21,17 @@ The UI is built on [assistant-ui](https://www.assistant-ui.com/) primitives with
 |---|---|---|---|
 | `AgentChat` | `agent-chat.tsx` | Top-level orchestrator: runtime provider, thread, composer | Exists, needs polish |
 | `AgentContext` | `agent-context.tsx` | React context for permission responses and pending permissions | Exists, done |
-| `UserMessage` | `user-message.tsx` | User message bubble with markdown | **To extract** from agent-chat inline → own file |
-| `AssistantMessage` | `assistant-message.tsx` | Assistant message with markdown, thinking, tools, action bar | **To extract** from agent-chat inline → own file |
+| `UserMessage` | `user-message.tsx` | User message bubble with markdown | **Done** |
+| `AssistantMessage` | `assistant-message.tsx` | Assistant message with markdown, thinking, tools, action bar | **Done** |
 
 ### Composer
 
 | Component | File | Purpose | Status |
 |---|---|---|---|
 | `AgentComposer` | `agent-chat.tsx` (inline) | Text input + actions row | Exists, needs draft persistence + keyboard |
-| `FolderPicker` | `folder-picker.tsx` | Working dir selector | **To copy** from `claude/chat/` to `agent/` (clean ACP-based impl) |
-| `PermissionModeSelector` | `permission-mode-selector.tsx` | Permission mode dropdown | **To copy** from `claude/chat/` to `agent/` |
-| `AgentTypeSelector` | `agent-type-selector.tsx` | Agent type dropdown | **To copy** from `claude/chat/` to `agent/` |
+| `FolderPicker` | `folder-picker.tsx` | Working dir selector | **Done** |
+| `PermissionModeSelector` | `permission-mode-selector.tsx` | Permission mode dropdown | **Done** |
+| `AgentTypeSelector` | `agent-type-selector.tsx` | Agent type dropdown | **Done** |
 | `SlashCommandPopover` | **To build** | Slash command autocomplete (`/` trigger) | Missing |
 | `FileTagPopover` | **To build** | File tag autocomplete (`@` trigger) | Missing |
 
@@ -50,15 +50,15 @@ The UI is built on [assistant-ui](https://www.assistant-ui.com/) primitives with
 
 | Component | File | Purpose | Status |
 |---|---|---|---|
-| `PermissionCard` | `permission-card.tsx` | Tool permission approval with ACP options — popup above input box (matching old UX) | Exists, needs keyboard shortcuts + animation + repositioning above composer |
+| `PermissionCard` | `permission-card.tsx` | Tool permission approval with ACP options — popup above input box (matching old UX) | **Done** (keyboard shortcuts, animation, popup positioning added) |
 
 ### Status & Info
 
 | Component | File | Purpose | Status |
 |---|---|---|---|
-| `ConnectionStatusBanner` | **To build** | Reconnecting/disconnected/reconnected banner | Missing |
-| `MessageDot` | **To build** | Universal status dot (12 types, color-coded, pulsing) | Missing |
-| `AgentWIP` | **To build** | "Working..." indicator with typing animation | Missing |
+| `ConnectionStatusBanner` | `connection-status-banner.tsx` | Reconnecting/disconnected/reconnected banner | **Done** |
+| `MessageDot` | `message-dot.tsx` | Universal status dot (12 types, color-coded, pulsing) | **Done** |
+| `AgentWIP` | `agent-wip.tsx` | "Working..." indicator with typing animation | **Done** |
 | `PlanView` | **To build** | Agent plan entries as checklist | Missing |
 | `RateLimitWarning` | N/A | Quota warning banner | **Skipped** — ACP protocol does not expose rate limit events |
 | `ContextUsageIndicator` | N/A | Circular progress ring + popover | **Skipped** — ACP `PromptResponse` has no token counts |
@@ -67,7 +67,7 @@ The UI is built on [assistant-ui](https://www.assistant-ui.com/) primitives with
 
 | Component | File | Purpose | Status |
 |---|---|---|---|
-| `MarkdownContent` | **To build** | Markdown → HTML with syntax highlighting, mermaid, linkified paths | Missing (critical) |
+| `MarkdownContent` | `markdown-content.tsx` | Markdown → HTML with syntax highlighting, mermaid, linkified paths | **Done** |
 | `FileRef` | **Deferred** | Clickable file path (filename shown, full path on hover, links to library) | Skipped for now |
 | `PreviewFullscreen` | **To build** | Full-viewport overlay for HTML/SVG/chart preview | Missing |
 
@@ -95,7 +95,7 @@ The old UI renders assistant text as full markdown with:
 - **File path linkification**: paths matching library structure become clickable `FileRef` links
 - **Two-pass rendering**: sync parse (instant, no highlighting) → async parse (Shiki + mermaid). Prevents blank flash.
 
-**ACP status**: Missing. Currently renders as plain `<p>` with `whitespace-pre-wrap`.
+**ACP status**: Done. `MarkdownContent` component exists at `markdown-content.tsx` and is used in `AssistantMessage` and `UserMessage`.
 
 **ACP approach**: Build `MarkdownContent` component using `@assistant-ui/react-markdown` (provides `MarkdownText` with syntax highlighting) or a custom renderer with `marked` + `shiki`. Each `AssistantMessage` text part uses this component.
 
@@ -226,7 +226,7 @@ Old features:
 - Double-click prevention
 - Max 3 visible, overflow counted
 
-**ACP status**: `PermissionCard` exists with ACP options (allow_once, allow_always, reject_once, reject_always). Missing: keyboard shortcuts, slide animation, max visible limit, action verb derivation.
+**ACP status**: Done. `PermissionCard` exists with ACP options (allow_once, allow_always, reject_once, reject_always), keyboard shortcuts, animation, and popup positioning above composer.
 
 **ACP difference**: ACP provides explicit `options[]` with `optionId` + `name` + `kind`. No need to derive action verbs — just render the options. But keyboard shortcuts and animation should be added.
 
@@ -243,7 +243,7 @@ Old features:
 - Draft preservation across disconnects
 - UUID-based message dedup on reconnect (replayed messages merge cleanly)
 
-**ACP status**: WS reconnection with exponential backoff exists. Missing: grace period, token refresh, visibility handling, ConnectionStatusBanner component, draft persistence.
+**ACP status**: `ConnectionStatusBanner` component is done. WS reconnection with exponential backoff exists. Still missing: grace period, token refresh, visibility handling, draft persistence.
 
 ---
 
@@ -343,9 +343,7 @@ Old features:
 - Pulsing animation for active states (`-wip`)
 - 20px height container matching mono line-height
 
-**ACP status**: Missing. Tool renderers have no status indicators.
-
-**ACP approach**: Build `MessageDot` component. Use in tool headers and assistant messages. Map ACP `ToolCallStatus` (pending, in_progress, completed, failed) to dot types.
+**ACP status**: Done. `MessageDot` component exists at `message-dot.tsx`. Used in tool headers and assistant messages, maps ACP `ToolCallStatus` to dot types.
 
 ---
 
@@ -357,9 +355,7 @@ Old `ClaudeWIP` features:
 - 5 words per turn, stable within turn, cycling with typing animation
 - 120ms per character, 240ms pause at end
 
-**ACP status**: Missing. `ThreadPrimitive.If running` controls Send/Cancel visibility but no visual "thinking" indicator.
-
-**ACP approach**: Build `AgentWIP` component. Show below the last message when `isRunning`. Typing animation optional — a simple pulsing dot + "Working..." is sufficient for V1.
+**ACP status**: Done. `AgentWIP` component exists at `agent-wip.tsx`. Shows below the last message when running.
 
 ---
 
@@ -423,24 +419,31 @@ Old features:
 
 ## Implementation Priority
 
-### P0 — Required for usable testing
-1. `MarkdownContent` — without this, code blocks and formatting are unreadable
-2. `MessageDot` — visual status for tool calls
-3. `ConnectionStatusBanner` — users need to know when disconnected
-4. `AgentWIP` — users need to know the agent is working
-5. Message dedup on reconnect
+### Done (was P0)
+- `MarkdownContent` — `markdown-content.tsx` ✓
+- `MessageDot` — `message-dot.tsx` ✓
+- `ConnectionStatusBanner` — `connection-status-banner.tsx` ✓
+- `AgentWIP` — `agent-wip.tsx` ✓
+- `UserMessage` — `user-message.tsx` ✓ (with markdown)
+- `AssistantMessage` — `assistant-message.tsx` ✓ (with markdown, copy button, tools)
+- `FolderPicker` — `folder-picker.tsx` ✓
+- `PermissionModeSelector` — `permission-mode-selector.tsx` ✓
+- `AgentTypeSelector` — `agent-type-selector.tsx` ✓
+- `PermissionCard` — `permission-card.tsx` ✓ (keyboard shortcuts, animation, popup positioning)
+
+### P0 — Still required for usable testing
+1. Message dedup on reconnect
 
 ### P1 — Feature parity
-6. `FileRef` — clickable file paths in tool headers
-7. Draft persistence (`useDraftPersistence`)
-8. Permission keyboard shortcuts + animation
-9. `SearchToolRenderer` + `FetchToolRenderer`
-10. `PlanView` for `agent.plan` entries
-11. Optimistic user message
+2. `FileRef` — clickable file paths in tool headers
+3. Draft persistence (`useDraftPersistence`)
+4. `SearchToolRenderer` + `FetchToolRenderer`
+5. `PlanView` for `agent.plan` entries
+6. Optimistic user message
 
 ### P2 — Polish
-12. Streaming text animation (materialization, cursor)
-13. `PreviewFullscreen` for HTML/mermaid
-14. `SlashCommandPopover` + `FileTagPopover`
-15. Virtual scrolling (if needed for long conversations)
-16. Hide-on-scroll input (mobile)
+7. Streaming text animation (materialization, cursor)
+8. `PreviewFullscreen` for HTML/mermaid
+9. `SlashCommandPopover` + `FileTagPopover`
+10. Virtual scrolling (if needed for long conversations)
+11. Hide-on-scroll input (mobile)
