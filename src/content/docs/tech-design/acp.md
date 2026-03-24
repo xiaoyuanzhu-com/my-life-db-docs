@@ -3,7 +3,7 @@ title: Agent Client Protocol (ACP)
 description: How MyLifeDB uses ACP for AI agent integration
 ---
 
-> Last edit: 2026-03-25
+> Last edit: 2026-03-24
 
 ## Overview
 
@@ -25,8 +25,9 @@ graph TD
 
     subgraph "Go Backend"
         Features["Features Layer\n(Chat, Inbox Agent, Summarize)"]
+        RawPipe["Raw Pipe\n(ACP JSON → WebSocket)"]
         SessionState["SessionState\n(Message buffer + fan-out)"]
-        Client["agent.Client wrapper\n(ACP callbacks → Event structs → JSON frames)"]
+        Client["agent.Client wrapper\n(implements ACP Client interface)"]
     end
 
     subgraph "ACP Layer"
@@ -41,7 +42,8 @@ graph TD
         Proxy["LLM Proxy\n(ANTHROPIC_BASE_URL)"]
     end
 
-    UI <-->|WebSocket| SessionState
+    UI <-->|WebSocket| RawPipe
+    RawPipe --> SessionState
     SessionState --> Features
     Features --> Client
     Client <-->|"Client interface\ncallbacks"| SDK
@@ -55,8 +57,8 @@ graph TD
 2. WebSocket delivers it to the backend, which calls `session.Send(prompt)`
 3. The Go backend calls `conn.Prompt()` on the ACP connection (blocking)
 4. During the blocking call, the agent streams updates back via `SessionUpdate` callbacks
-5. Each callback is translated to an `Event` struct, then composed into a JSON frame and broadcast via SessionState
-6. When `Prompt()` returns, a `turn.complete` frame is composed and sent to the frontend
+5. Each callback re-marshals the ACP notification to JSON and broadcasts the raw bytes via WebSocket (no translation)
+6. When `Prompt()` returns, a `turn.complete` frame is sent to the frontend
 
 ## Protocol Summary
 
@@ -212,51 +214,45 @@ The following behaviors are verified ground truth from our test suite, tested ag
 
 ## Our Integration
 
-### Frame Format
+### Raw Pipe
 
-All WebSocket frames are flat JSON objects with a `type` field as the sole discriminator. There is no wrapper or envelope -- each frame is composed directly via `json.Marshal(map[string]any{...})`.
+ACP `session/update` notifications are piped directly to the frontend as raw JSON -- no field renaming, no format translation. The backend re-marshals the ACP SDK's `SessionUpdate` struct back to JSON (which produces the original ACP wire format with `sessionUpdate` discriminator) and broadcasts it over WebSocket.
 
-**Frames translated from ACP events** (via `marshalEventFrames`):
+**ACP native frames** (piped raw, discriminated by `sessionUpdate` field):
 
-| `type` value | Source ACP Event | Frontend Rendering |
-|-------------|-----------------|-------------------|
-| `agent.messageChunk` | `AgentMessageChunk` | Streaming typewriter text |
-| `agent.thoughtChunk` | `AgentThoughtChunk` | Thinking indicator |
-| `agent.toolCall` | `ToolCall` | Tool call card (in-progress) |
-| `agent.toolCallUpdate` | `ToolCallUpdate` | Tool result (completed) |
-| `agent.plan` | `Plan` | Plan view entries |
-| `user.echo` | `UserMessageChunk` / replay | User message bubble |
-| `permission.request` | `RequestPermission` callback | Permission modal |
-| `session.modeUpdate` | `CurrentModeUpdate` / session init | Mode state update |
-| `session.modelsUpdate` | Session init | Models state update |
-| `session.commandsUpdate` | `AvailableCommandsUpdate` | Commands state update |
+| `sessionUpdate` value | Frontend Rendering |
+|-----------------------|-------------------|
+| `agent_message_chunk` | Streaming typewriter text |
+| `agent_thought_chunk` | Thinking indicator |
+| `tool_call` | Tool call card (in-progress) |
+| `tool_call_update` | Tool result (completed/failed) |
+| `plan` | Plan view entries |
+| `user_message_chunk` | User message bubble |
+| `current_mode_update` | Mode state update |
+| `available_commands_update` | Commands state update |
 
-**Frames composed by the backend** (not from ACP events):
+**Synthesized frames** (backend constructs these, discriminated by `type` field):
 
-| `type` value | Source | Purpose |
-|-------------|--------|---------|
-| `turn.start` | Before agent content | Opens a new assistant message in the frontend |
-| `turn.complete` | `Prompt()` return | Signals end of agent turn; carries `stopReason` |
-| `error` | Backend failures | Session creation errors, send failures |
-| `session.info` | WebSocket connect | Initial `isProcessing` / `totalMessages` state |
+| `type` value | Source | Why synthesized |
+|-------------|--------|-----------------|
+| `turn.complete` | `Prompt()` return value | ACP signals turn completion via JSON-RPC response, not a notification. The SDK consumes it to unblock `Prompt()`. |
+| `error` | Backend failures | Session creation errors, WebSocket errors -- not from ACP. |
+| `permission.request` | `RequestPermission` callback | Separate ACP JSON-RPC method, not a `session/update` notification. |
+| `session.modeUpdate` | `NewSession` response | Initial session modes from session creation. |
+| `session.modelsUpdate` | `NewSession` response | Initial session models from session creation. |
 
-Frames that create messages carry a `ts` field (Unix millis) used by the frontend for `createdAt` timestamps.
+**What the backend does NOT add:** no `ts`, no `sessionId`, no `status`, no field renames. The frontend reads ACP field names directly (`toolCallId`, `title`, `kind`, `rawInput`, `rawOutput`, `content`, etc.).
 
-### Translation Pipeline
-
-ACP callbacks flow through two stages before reaching the frontend:
-
-1. **ACP → Event structs** (`acpclient.go`): Each `SessionUpdate` callback is translated into a typed `agentsdk.Event` struct (e.g., `EventDelta`, `EventMessage`, `EventComplete`). This normalizes ACP's discriminated union into Go types.
-
-2. **Event → JSON frame** (`marshalEventFrames`): Each `Event` is composed into one or more flat JSON objects via `json.Marshal`. No intermediate abstraction -- each frame's shape is visible at the composition site.
+**Heavy content stripping** is the only transformation applied to raw frames -- large file reads and base64 images are stripped before broadcasting to avoid shipping unrenderable payloads to the browser.
 
 ### SessionState
 
 SessionState is a lightweight message buffer with multi-client fan-out:
 
-- One event channel per active session
+- One ACP event channel per active session
 - Multiple WebSocket connections can subscribe to the same session
-- Unread tracking counts `turn.complete` frames against `last_read_count`
+- Page model (500 msgs / 500KB seal thresholds) applies on top -- this is our concern, not ACP's
+- Unread tracking counts `EventComplete` events against `last_read_count`
 
 ### Permission Flow
 
@@ -271,16 +267,16 @@ sequenceDiagram
     Note over Client: Blocks agent goroutine
 
     Client-->>WS: permission.request frame
-    WS-->>Modal: Permission modal rendered
+    WS-->>Modal: Permission card rendered
 
     Modal->>WS: User clicks Allow/Reject
-    WS->>Client: RespondToPermission(requestID, optionID)
+    WS->>Client: RespondToPermission(requestID, optionIndex)
 
-    Client-->>Agent: RequestPermissionResponse(selected option)
+    Client-->>Agent: RequestPermissionResponse(selected index)
     Note over Agent: Resumes execution
 ```
 
-The `RequestPermission` callback blocks the agent until the user responds. The Go client composes a `permission.request` JSON frame and broadcasts it over WebSocket. The frontend renders a permission modal, and the user's choice flows back through `RespondToPermission` which unblocks the callback.
+The `RequestPermission` callback blocks the agent until the user responds. The Go client constructs a `permission.request` JSON frame and broadcasts it over WebSocket. The frontend renders a permission card, and the user's choice flows back through `RespondToPermission` which unblocks the callback.
 
 ### LLM Proxy Integration
 
@@ -313,7 +309,7 @@ agentConfigs := map[string]AgentConfig{
 }
 ```
 
-3. **No Go adapter code needed.** The ACP protocol handles all communication. Any agent that implements the ACP server side works automatically with our existing Client implementation, SessionState, and permission flow.
+3. **No Go adapter code needed.** The ACP protocol handles all communication. Any agent that implements the ACP server side works automatically with our existing Client implementation, raw pipe, SessionState, and permission flow.
 
 ## Known Limitations and Gotchas
 
