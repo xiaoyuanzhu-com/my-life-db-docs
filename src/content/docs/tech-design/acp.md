@@ -3,7 +3,7 @@ title: Agent Client Protocol (ACP)
 description: How MyLifeDB uses ACP for AI agent integration
 ---
 
-> Last edit: 2026-03-20
+> Last edit: 2026-03-25
 
 ## Overview
 
@@ -25,9 +25,8 @@ graph TD
 
     subgraph "Go Backend"
         Features["Features Layer\n(Chat, Inbox Agent, Summarize)"]
-        WSBridge["WSBridge\n(ACP events → WS messages)"]
         SessionState["SessionState\n(Message buffer + fan-out)"]
-        Client["agent.Client wrapper\n(implements ACP Client interface)"]
+        Client["agent.Client wrapper\n(ACP callbacks → Event structs → JSON frames)"]
     end
 
     subgraph "ACP Layer"
@@ -42,8 +41,7 @@ graph TD
         Proxy["LLM Proxy\n(ANTHROPIC_BASE_URL)"]
     end
 
-    UI <-->|WebSocket| WSBridge
-    WSBridge --> SessionState
+    UI <-->|WebSocket| SessionState
     SessionState --> Features
     Features --> Client
     Client <-->|"Client interface\ncallbacks"| SDK
@@ -54,11 +52,11 @@ graph TD
 **Data flow for a prompt:**
 
 1. User types a message in the frontend
-2. WebSocket delivers it to WSBridge, which calls `session.Send(prompt)`
+2. WebSocket delivers it to the backend, which calls `session.Send(prompt)`
 3. The Go backend calls `conn.Prompt()` on the ACP connection (blocking)
 4. During the blocking call, the agent streams updates back via `SessionUpdate` callbacks
-5. Each callback translates the ACP event into the frontend's message format and broadcasts via WebSocket
-6. When `Prompt()` returns, a completion event is sent to the frontend
+5. Each callback is translated to an `Event` struct, then composed into a JSON frame and broadcast via SessionState
+6. When `Prompt()` returns, a `turn.complete` frame is composed and sent to the frontend
 
 ## Protocol Summary
 
@@ -214,27 +212,51 @@ The following behaviors are verified ground truth from our test suite, tested ag
 
 ## Our Integration
 
-### WSBridge
+### Frame Format
 
-The WSBridge translates ACP events into the frontend's existing WebSocket message format. Each `SessionUpdate` callback maps ACP notification types to our event types:
+All WebSocket frames are flat JSON objects with a `type` field as the sole discriminator. There is no wrapper or envelope -- each frame is composed directly via `json.Marshal(map[string]any{...})`.
 
-| ACP Notification | Our Event | Frontend Rendering |
-|-----------------|-----------|-------------------|
-| `AgentMessageChunk` (partial) | `EventDelta` | Streaming typewriter text |
-| `AgentMessageChunk` (complete) | `EventMessage` | Full message block |
-| `AgentThoughtChunk` | `EventThinkingDelta` | Thinking indicator |
-| `ToolCallStart` | `EventMessage` (BlockToolUse) | Tool call card |
-| `ToolCallUpdate` | `EventMessage` (BlockToolResult) | Tool output |
-| `UserMessageChunk` (echo) | Skipped | Agent echoes user messages; we skip to avoid duplicates |
+**Frames translated from ACP events** (via `marshalEventFrames`):
+
+| `type` value | Source ACP Event | Frontend Rendering |
+|-------------|-----------------|-------------------|
+| `agent.messageChunk` | `AgentMessageChunk` | Streaming typewriter text |
+| `agent.thoughtChunk` | `AgentThoughtChunk` | Thinking indicator |
+| `agent.toolCall` | `ToolCall` | Tool call card (in-progress) |
+| `agent.toolCallUpdate` | `ToolCallUpdate` | Tool result (completed) |
+| `agent.plan` | `Plan` | Plan view entries |
+| `user.echo` | `UserMessageChunk` / replay | User message bubble |
+| `permission.request` | `RequestPermission` callback | Permission modal |
+| `session.modeUpdate` | `CurrentModeUpdate` / session init | Mode state update |
+| `session.modelsUpdate` | Session init | Models state update |
+| `session.commandsUpdate` | `AvailableCommandsUpdate` | Commands state update |
+
+**Frames composed by the backend** (not from ACP events):
+
+| `type` value | Source | Purpose |
+|-------------|--------|---------|
+| `turn.start` | Before agent content | Opens a new assistant message in the frontend |
+| `turn.complete` | `Prompt()` return | Signals end of agent turn; carries `stopReason` |
+| `error` | Backend failures | Session creation errors, send failures |
+| `session.info` | WebSocket connect | Initial `isProcessing` / `totalMessages` state |
+
+Frames that create messages carry a `ts` field (Unix millis) used by the frontend for `createdAt` timestamps.
+
+### Translation Pipeline
+
+ACP callbacks flow through two stages before reaching the frontend:
+
+1. **ACP → Event structs** (`acpclient.go`): Each `SessionUpdate` callback is translated into a typed `agentsdk.Event` struct (e.g., `EventDelta`, `EventMessage`, `EventComplete`). This normalizes ACP's discriminated union into Go types.
+
+2. **Event → JSON frame** (`marshalEventFrames`): Each `Event` is composed into one or more flat JSON objects via `json.Marshal`. No intermediate abstraction -- each frame's shape is visible at the composition site.
 
 ### SessionState
 
 SessionState is a lightweight message buffer with multi-client fan-out:
 
-- One ACP event channel per active session
+- One event channel per active session
 - Multiple WebSocket connections can subscribe to the same session
-- Page model (500 msgs / 500KB seal thresholds) applies on top -- this is our concern, not ACP's
-- Unread tracking counts `EventComplete` events against `last_read_count`
+- Unread tracking counts `turn.complete` frames against `last_read_count`
 
 ### Permission Flow
 
@@ -248,17 +270,17 @@ sequenceDiagram
     Agent->>Client: RequestPermission(tool, options)
     Note over Client: Blocks agent goroutine
 
-    Client-->>WS: EventPermissionRequest
-    WS-->>Modal: Permission card rendered
+    Client-->>WS: permission.request frame
+    WS-->>Modal: Permission modal rendered
 
     Modal->>WS: User clicks Allow/Reject
-    WS->>Client: RespondToPermission(requestID, optionIndex)
+    WS->>Client: RespondToPermission(requestID, optionID)
 
-    Client-->>Agent: RequestPermissionResponse(selected index)
+    Client-->>Agent: RequestPermissionResponse(selected option)
     Note over Agent: Resumes execution
 ```
 
-The `RequestPermission` callback blocks the agent until the user responds. The Go client emits an `EventPermissionRequest` over WebSocket, the frontend renders a permission modal, and the user's choice flows back through `RespondToPermission` which unblocks the callback.
+The `RequestPermission` callback blocks the agent until the user responds. The Go client composes a `permission.request` JSON frame and broadcasts it over WebSocket. The frontend renders a permission modal, and the user's choice flows back through `RespondToPermission` which unblocks the callback.
 
 ### LLM Proxy Integration
 
@@ -291,7 +313,7 @@ agentConfigs := map[string]AgentConfig{
 }
 ```
 
-3. **No Go adapter code needed.** The ACP protocol handles all communication. Any agent that implements the ACP server side works automatically with our existing Client implementation, WSBridge, SessionState, and permission flow.
+3. **No Go adapter code needed.** The ACP protocol handles all communication. Any agent that implements the ACP server side works automatically with our existing Client implementation, SessionState, and permission flow.
 
 ## Known Limitations and Gotchas
 
