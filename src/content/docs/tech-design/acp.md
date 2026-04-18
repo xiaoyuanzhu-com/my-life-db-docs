@@ -3,7 +3,7 @@ title: Agent Client Protocol (ACP)
 description: How MyLifeDB uses ACP for AI agent integration
 ---
 
-> Last edit: 2026-03-24
+> Last edit: 2026-04-18
 
 ## Overview
 
@@ -11,7 +11,7 @@ description: How MyLifeDB uses ACP for AI agent integration
 
 **Why ACP matters:** Without a protocol, integrating N applications with M agents requires N x M custom adapters. ACP reduces this to N + M -- each application implements the client side of the protocol once, each agent implements the server side once, and any client can talk to any agent.
 
-MyLifeDB uses the [coder/acp-go-sdk](https://github.com/coder/acp-go-sdk) Go SDK to connect to [claude-agent-acp](https://github.com/zed-industries/claude-agent-acp), a bridge that exposes the Claude CLI as an ACP-compatible agent.
+MyLifeDB uses the [coder/acp-go-sdk](https://github.com/coder/acp-go-sdk) Go SDK to connect to five ACP agents: Claude Code, Codex, Qwen Code, Gemini CLI, and opencode. All five are routed through the same LiteLLM gateway (`AGENT_BASE_URL` / `AGENT_API_KEY`), so adding a new model to the gateway makes it available to whichever agents support the matching protocol.
 
 ## Architecture
 
@@ -278,38 +278,45 @@ sequenceDiagram
 
 The `RequestPermission` callback blocks the agent until the user responds. The Go client constructs a `permission.request` JSON frame and broadcasts it over WebSocket. The frontend renders a permission card, and the user's choice flows back through `RespondToPermission` which unblocks the callback.
 
-### LLM Proxy Integration
+### LLM Gateway Integration
 
-The agent process connects to our LLM proxy instead of the Anthropic API directly. This is configured via environment variables injected at spawn time:
+Each agent process connects to our LiteLLM gateway instead of its vendor API directly. The server injects agent-specific env vars (or config files) at spawn time — see the agents table in [Registered Agents](#registered-agents) for the per-agent mapping.
+
+**Common operator-facing env vars:**
 
 | Variable | Purpose |
 |----------|---------|
-| `ANTHROPIC_API_KEY` | API key (or dummy value when using proxy auth) |
-| `ANTHROPIC_BASE_URL` | Points to our LLM proxy endpoint |
-| `MLD_PROXY_TOKEN` | Ephemeral token for proxy authentication |
+| `AGENT_BASE_URL` | LiteLLM gateway endpoint — injected into each agent under its own name (`ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`, etc.) |
+| `AGENT_API_KEY` | Gateway API key — same fan-out treatment |
+| `AGENT_CUSTOMER_ID` | Optional per-user customer ID for usage attribution. Propagated as `x-litellm-customer-id` where the agent supports custom HTTP headers (currently Claude Code via `ANTHROPIC_CUSTOM_HEADERS` and Codex via `config.toml`; Qwen/Gemini pending) |
+| `AGENT_MODELS` | JSON array of available models with per-agent filtering — drives both the UI model dropdown and the per-agent default model env var (`ANTHROPIC_MODEL`, `OPENAI_MODEL`, `GEMINI_MODEL`) |
 
-## Adding a New Agent
+## Registered Agents
 
-Adding a new ACP-compatible agent requires no Go adapter code:
+MyLifeDB registers five ACP agents in `backend/server/server.go`. All route through the LiteLLM gateway configured by `AGENT_BASE_URL` / `AGENT_API_KEY`, but each expresses that routing in its own conventions.
 
-1. **Install the ACP binary.** For example: `npm install -g @zed-industries/claude-agent-acp`
+| Agent | Binary | Args | Gateway routing |
+|-------|--------|------|-----------------|
+| Claude Code | `claude-agent-acp` | — | `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`, `ANTHROPIC_CUSTOM_HEADERS` (for `x-litellm-customer-id`) |
+| Codex | `codex-acp` | — | `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL` + `~/.codex/{auth.json,config.toml}` on disk (customer-ID header lives in `config.toml` because codex has no env var for custom headers) |
+| Qwen Code | `qwen` | `--acp` | `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL` |
+| Gemini CLI | `gemini` | `--acp` | `GOOGLE_GEMINI_BASE_URL`, `GEMINI_API_KEY`, `GEMINI_MODEL` |
+| opencode | `opencode` | `acp` | File-based config at `~/.config/opencode/opencode.json` (no env vars) |
 
-2. **Register an `AgentConfig` in `server.go`.** Specify the binary path, arguments, and any environment variables:
+Only Claude Code participates in the pre-warmed agent pool. The others spawn a fresh process per session.
 
-```go
-agentConfigs := map[string]AgentConfig{
-    "claude": {
-        Command: "claude-agent-acp",
-        Args:    []string{},
-        Env: []string{
-            "ANTHROPIC_BASE_URL=" + proxyURL,
-        },
-    },
-    // Add new agents here -- same structure, different binary
-}
-```
+### Adding another ACP agent
 
-3. **No Go adapter code needed.** The ACP protocol handles all communication. Any agent that implements the ACP server side works automatically with our existing Client implementation, raw pipe, SessionState, and permission flow.
+Adding a new ACP-compatible agent requires no Go adapter code — just five inline touchpoints:
+
+1. **Install the binary** on the deployment host.
+2. **Add an `AgentType` constant** in `backend/agentsdk/types.go`.
+3. **Add cases** to the enum↔string switches in `backend/api/agent_manager.go` (`agentTypeString` and the `CreateSession` resolver).
+4. **Register an `AgentConfig`** in `backend/server/server.go` inside the `HasAgentLLM()` guard (declare the env map at the same scope as `ccEnv`/`codexEnv`; populate its keys inside the guard so empty strings never leak into the spawned process).
+5. **Add a model env override** (if the binary accepts one) to the `switch agentType` block in `agent_manager.go`, and a `defaultConfigOptions` entry for the UI.
+6. **Extend the frontend selector** in `frontend/app/components/agent/agent-type-selector.tsx` — icon + `AgentType` union + `DEFAULT_MODES` entry + `AGENT_TYPES` entry.
+
+Any ACP-compatible binary works automatically with the existing Client implementation, raw pipe, SessionState, and permission flow. See `docs/plans/2026-04-18-acp-agents-gemini-qwen-opencode-design.md` in the main repo for the reasoning behind this inline pattern (vs. a config-driven registry).
 
 ## Known Limitations and Gotchas
 
