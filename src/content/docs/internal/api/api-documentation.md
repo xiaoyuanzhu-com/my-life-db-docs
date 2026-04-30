@@ -2,7 +2,7 @@
 title: "API Documentation"
 ---
 
-> Last edit: 2026-02-26
+> Last edit: 2026-04-30
 
 This document describes the REST API endpoints for the MyLifeDB backend. Mobile app developers should use this as a reference for implementing iOS and Android clients.
 
@@ -756,7 +756,7 @@ DELETE /api/library/pins
 
 ### Search Files
 
-Supports keyword search (Meilisearch), semantic search (Qdrant/embeddings), or fallback database search.
+Supports keyword search (SQLite FTS5 with the `wangfenjin/simple` tokenizer, via `db.SearchFTS()`) and semantic search (Qdrant/embeddings). The handler in `backend/api/search.go` calls `db.SearchFTS()` directly. The response shape is unchanged — hits include snippets with `<em>...</em>` highlight markup around matching terms.
 
 ```http
 GET /api/search

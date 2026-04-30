@@ -2,7 +2,7 @@
 title: "Architecture Overview"
 ---
 
-> Last edit: 2026-02-26
+> Last edit: 2026-04-30
 
 This document is the entry point for agents working on the MyLifeDB codebase. It describes the overall system design and points to component-specific documentation.
 
@@ -81,7 +81,7 @@ When working on a specific area, read the corresponding component doc:
 | Authentication | [components/authentication.md](/docs/internal/components/authentication/) | OAuth, password auth modes |
 | HTTP API | [components/http-api.md](/docs/internal/components/http-api/) | Endpoints, handlers, routes |
 | Database | [components/database-layer.md](/docs/internal/components/database-layer/) | SQLite, migrations, queries |
-| External services | [components/external-service-integrations.md](/docs/internal/components/external-service-integrations/) | OpenAI, Qdrant, Meilisearch, etc. |
+| External services | [components/external-service-integrations.md](/docs/internal/components/external-service-integrations/) | OpenAI, Qdrant, etc. |
 
 ## Event Flow Between Components
 
@@ -137,12 +137,12 @@ backend/
 ├── vendors/          # External service clients
 │   ├── openai.go     # OpenAI API (completions, embeddings, vision)
 │   ├── qdrant.go     # Vector database
-│   ├── meilisearch.go # Full-text search
 │   ├── haid.go       # HAID embeddings + whisperx
 │   └── aliyun.go     # Aliyun real-time ASR
 └── workers/
-    └── digest/       # File processing worker
-        └── digesters/ # Individual digester implementations
+    ├── digest/       # File processing worker
+    │   └── digesters/ # Individual digester implementations
+    └── textindex/    # Synchronous SQLite FTS5 indexer
 ```
 
 ## Shutdown Coordination

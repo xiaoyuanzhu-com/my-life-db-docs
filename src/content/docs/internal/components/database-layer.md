@@ -2,7 +2,7 @@
 title: "Database Layer"
 ---
 
-> Last edit: 2026-02-26
+> Last edit: 2026-04-30
 
 The database layer provides SQLite access with migrations, generic query helpers, and domain-specific functions.
 
@@ -20,7 +20,7 @@ graph LR
     DB --> pins["pins.go\nPin operations"]
     DB --> settings["settings.go\nSettings operations"]
     DB --> sqlar["sqlar.go\nSQLAR archive operations"]
-    DB --> meili["meili_documents.go\nMeilisearch sync"]
+    DB --> fts["files_fts.go\nSQLite FTS5 keyword index (wangfenjin/simple tokenizer)"]
     DB --> qdrant["qdrant_documents.go\nQdrant sync"]
 ```
 
@@ -184,7 +184,8 @@ type Migration struct {
 | Version | File | Description |
 |---------|------|-------------|
 | 1 | `migration_001_initial.go` | Initial schema (files, digests, sqlar, settings) |
-| 2 | `migration_002_search_tables.go` | Search index tables (meili, qdrant) |
+| 2 | `migration_002_search_tables.go` | Search index staging tables (qdrant). The original Meilisearch staging table (`meili_documents`) was dropped in migration 026. |
+| 26 | `migration_026_files_fts.go` | Adds the `files_fts` FTS5 virtual table backed by the `wangfenjin/simple` tokenizer (jieba CJK + pinyin + English) and drops legacy Meilisearch artifacts. |
 | 3 | `migration_003_fix_pins_schema.go` | Fix pins table schema |
 | 10 | `migration_010_epoch_timestamps.go` | Migrate all timestamp columns from TEXT (RFC3339) to INTEGER (Unix epoch milliseconds) |
 

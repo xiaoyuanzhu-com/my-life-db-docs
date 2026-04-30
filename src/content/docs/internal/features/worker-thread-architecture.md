@@ -2,7 +2,7 @@
 title: "Worker Thread Architecture"
 ---
 
-> Last edit: 2026-02-26
+> Last edit: 2026-04-30
 
 ## Overview
 
@@ -29,7 +29,6 @@ graph TB
     end
 
     subgraph "External Services"
-        MEILI[Meilisearch]
         QDRANT[Qdrant]
         OPENAI[OpenAI]
         HOMELAB[Homelab AI]
@@ -40,7 +39,6 @@ graph TB
     FSW -->|inbox-changed| API
     API --> NS
 
-    COORD --> MEILI
     COORD --> QDRANT
     COORD --> OPENAI
     COORD --> HOMELAB
@@ -90,8 +88,9 @@ graph TB
 10. `url-crawler` - Fetch and parse URLs
 11. `url-crawl-summary` - Summarize crawled content (OpenAI)
 12. `tags` - Generate tags (OpenAI)
-13. `search-keyword` - Index to Meilisearch
-14. `search-semantic` - Embed to Qdrant
+13. `search-semantic` - Embed to Qdrant
+
+Note: keyword search is handled by SQLite FTS5 (with the wangfenjin/simple tokenizer for CJK + English) and is updated synchronously by the textindex worker on file change events — it is no longer a digester in the pipeline.
 
 **Messages received:**
 | Type | Payload | Description |

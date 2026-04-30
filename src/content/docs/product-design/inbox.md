@@ -2,7 +2,7 @@
 title: "Inbox"
 ---
 
-> Last edit: 2026-02-26
+> Last edit: 2026-04-30
 
 **Version:** 1.0
 **Last Updated:** 2026-02-16
@@ -246,8 +246,9 @@ Files are automatically enriched after upload. Processing is async and status is
 | `speech-recognition-cleanup` | Transcripts | Cleaned transcript |
 | `speech-recognition-summary` | Transcripts | AI summary |
 | `speaker-embedding` | Audio | Speaker identification vector |
-| `search-keyword` | All files | Meilisearch index entry |
 | `search-semantic` | All files | Qdrant vector embedding |
+
+(Keyword search is handled in-process by the SQLite FTS5 `files_fts` virtual table, populated synchronously by the textindex worker on file create/update — there is no separate `search-keyword` digester.)
 
 **Processing flow:**
 1. File uploaded → saved to disk
@@ -306,7 +307,7 @@ Files are automatically enriched after upload. Processing is async and status is
 
 ### 4.7 Search
 
-**Backend:** Dual search system — Meilisearch (keyword) + Qdrant (semantic).
+**Backend:** Dual search system — SQLite FTS5 (keyword, via the `files_fts` virtual table with the `wangfenjin/simple` tokenizer for CJK + English) + Qdrant (semantic).
 
 **UX:**
 - Search input integrated into OmniInput (web) / separate search view (iOS)

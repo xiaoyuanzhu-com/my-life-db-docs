@@ -2,7 +2,7 @@
 title: "Digest System"
 ---
 
-> Last edit: 2026-02-26
+> Last edit: 2026-04-30
 
 The digest system processes files to extract content, metadata, generate previews, and create search embeddings.
 
@@ -31,7 +31,7 @@ graph TD
     P2 --> P3
 
     subgraph P3["Phase 3: Tags and Search"]
-        Tags & SearchKeyword & SearchSemantic
+        Tags & SearchSemantic
     end
 
     P3 --> DB["Store results in database"]
@@ -150,8 +150,9 @@ Digesters are executed in this exact order (defined in `registry.go`):
 | Digester | Output Names | Description |
 |----------|--------------|-------------|
 | TagsDigester | `tags` | Generates tags from content (OpenAI) |
-| SearchKeywordDigester | `search-keyword` | Indexes in Meilisearch |
 | SearchSemanticDigester | `search-semantic` | Creates vector embeddings (Qdrant) |
+
+> Keyword search is not a digester. The `textindex` worker (`backend/workers/textindex/indexer.go`) keeps the SQLite FTS5 virtual table `files_fts` in sync via `db.IndexFile`/`db.DeleteFileFromIndex`/`db.RenameFileInIndex`/`db.RenamePrefixInIndex` on file change events.
 
 ## Digest Status
 
@@ -185,15 +186,15 @@ When an upstream digester completes with content, downstream digesters are reset
 
 ```go
 var CascadingResets = map[string][]string{
-    "url-crawl-content":     {"url-crawl-summary", "tags", "search-keyword", "search-semantic"},
-    "doc-to-markdown":       {"tags", "search-keyword", "search-semantic"},
-    "image-ocr":             {"tags", "search-keyword", "search-semantic"},
-    "image-captioning":      {"tags", "search-keyword", "search-semantic"},
-    "image-objects":         {"tags", "search-keyword", "search-semantic"},
-    "speech-recognition":    {"speaker-embedding", "speech-recognition-cleanup", "speech-recognition-summary", "tags", "search-keyword", "search-semantic"},
+    "url-crawl-content":     {"url-crawl-summary", "tags", "search-semantic"},
+    "doc-to-markdown":       {"tags", "search-semantic"},
+    "image-ocr":             {"tags", "search-semantic"},
+    "image-captioning":      {"tags", "search-semantic"},
+    "image-objects":         {"tags", "search-semantic"},
+    "speech-recognition":    {"speaker-embedding", "speech-recognition-cleanup", "speech-recognition-summary", "tags", "search-semantic"},
     "url-crawl-summary":     {"tags"},
-    "speech-recognition-summary": {"tags", "search-keyword", "search-semantic"},
-    "tags":                  {"search-keyword", "search-semantic"},
+    "speech-recognition-summary": {"tags", "search-semantic"},
+    "tags":                  {"search-semantic"},
 }
 ```
 
@@ -321,7 +322,7 @@ func (w *Worker) processFile(filePath string) {
 
 3. If it produces output that others depend on, add to `CascadingResets`:
    ```go
-   "my-new": {"tags", "search-keyword", "search-semantic"},
+   "my-new": {"tags", "search-semantic"},
    ```
 
 ## Database Schema

@@ -2,7 +2,7 @@
 title: "Configuration"
 ---
 
-> Last edit: 2026-02-26
+> Last edit: 2026-04-30
 
 Configuration is managed via environment variables and loaded once at startup as a singleton.
 
@@ -29,10 +29,6 @@ type Config struct {
     DatabasePath string
 
     // External services
-    MeiliHost   string
-    MeiliAPIKey string
-    MeiliIndex  string
-
     QdrantHost       string
     QdrantAPIKey     string
     QdrantCollection string
@@ -95,13 +91,9 @@ func Get() *Config {
 
 Paths are converted to absolute paths on load.
 
-### Meilisearch (Full-text Search)
+### Full-text Search
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MEILI_HOST` | - | Meilisearch URL (e.g., `http://localhost:7700`) |
-| `MEILI_API_KEY` | - | Meilisearch API key |
-| `MEILI_INDEX` | `mylifedb_files` | Index name |
+Keyword search uses an in-process SQLite FTS5 virtual table (`files_fts`) with the `wangfenjin/simple` tokenizer (jieba CJK + pinyin + English). There is no external service to configure; the index is initialized by the `migration_026_files_fts.go` migration on first run.
 
 ### Qdrant (Vector Search)
 
@@ -193,7 +185,6 @@ USER_DATA_DIR=./data
 APP_DATA_DIR=./.my-life-db
 
 # Optional services
-MEILI_HOST=http://localhost:7700
 QDRANT_HOST=http://localhost:6333
 OPENAI_API_KEY=sk-...
 ```

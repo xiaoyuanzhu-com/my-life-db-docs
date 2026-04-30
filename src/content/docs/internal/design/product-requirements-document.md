@@ -2,7 +2,7 @@
 title: "Product Requirements Document"
 ---
 
-> Last edit: 2026-02-26
+> Last edit: 2026-04-30
 
 **Version:** 1.1
 **Last Updated:** 2025-10-28
@@ -921,19 +921,20 @@ await learnPattern({
 
 ### 10.5 Search Architecture
 
-**Decision: Dual Search System**
+**Decision: Dual Search System (in-process keyword + dedicated vector DB)**
 
-1. **Meilisearch:** Instant keyword search (<50ms)
-   - Typo-tolerant
-   - Faceted search
-   - Real-time indexing
+1. **SQLite FTS5 (`files_fts`):** Instant keyword search (<50ms), in-process — no separate service
+   - `wangfenjin/simple` tokenizer (jieba CJK + pinyin + English; the same tokenizer WeChat uses)
+   - BM25 scoring; `snippet()` highlighting with `<em>...</em>` markers
+   - Synchronously updated on every file change by the textindex worker, so the index never lags behind the filesystem
+   - Atomic with the rest of the database — file rename/move/delete and index update happen in one SQLite transaction
 
 2. **Qdrant:** Semantic/vector search (~100-200ms)
    - Conceptual similarity
    - "Find similar ideas"
    - Embeddings-based
 
-**Deployment:** Docker Compose (both services)
+**Deployment:** Single Go binary + (optional) Qdrant container. No Meilisearch.
 
 **Why Both:**
 - **Keyword search:** Fast, precise, user expects it
@@ -946,11 +947,11 @@ await learnPattern({
 - User can toggle: "Keyword" vs "Semantic" vs "Both"
 
 **Alternatives Considered:**
-- ❌ **SQLite FTS5 only:** Rejected - no semantic search, limited features
-- ❌ **Qdrant only:** Rejected - slower, users expect instant keyword search
-- ❌ **sqlite-vss (SQLite vector):** Rejected - less mature, fewer features than Qdrant
+- ❌ **Meilisearch (previous design):** Rejected — required an extra service to ship/run/keep in sync; the eventual-consistency staging table (`meili_documents`) added complexity. SQLite FTS5 with `wangfenjin/simple` covers the same query needs (CJK + English + pinyin, BM25, highlighting) with zero extra processes.
+- ❌ **Qdrant only:** Rejected — slower, users expect instant keyword search
+- ❌ **sqlite-vss (SQLite vector):** Rejected — less mature, fewer features than Qdrant
   - **Trade-off:** Simplicity (one DB) vs. features (dedicated vector DB)
-  - **Decision:** Accept Docker Compose complexity for better search experience
+  - **Decision:** Accept Qdrant for vector search; keep keyword search in-process via FTS5
 
 ### 10.6 Archive Strategy
 

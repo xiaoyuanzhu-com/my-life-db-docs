@@ -2,7 +2,7 @@
 title: "Backend Architecture"
 ---
 
-> Last edit: 2026-02-26
+> Last edit: 2026-04-30
 
 ## Overview
 
@@ -121,7 +121,6 @@ type server.Config struct {
     OpenAIKey       string
     HAIDBaseURL     string
     HAIDAPIKey      string
-    MeiliHost       string
     QdrantURL       string
     QdrantAPIKey    string
 }

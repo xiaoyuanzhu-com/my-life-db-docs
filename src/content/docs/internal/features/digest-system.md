@@ -2,7 +2,9 @@
 title: "Digest System"
 ---
 
-> Last edit: 2026-02-26
+> Last edit: 2026-04-30
+
+> **Keyword search note.** Keyword indexing is no longer a digester. SQLite FTS5 (`files_fts`) is updated synchronously by the textindex worker on file change events using digester output already in the database. Anywhere this doc previously mentioned `search-keyword`, only `search-semantic` (Qdrant) remains in the digester pipeline.
 
 The digest system is a pipeline architecture that processes files through multiple stages of AI-powered enrichment (crawling, conversion, summarization, tagging, indexing, etc.).
 
@@ -95,9 +97,9 @@ Example: a1b2c3d4e5f6/screenshot/page.png
 **Users should see a deterministic set of digests for each file based on file type alone.**
 
 When a user sees a file, they should know exactly which digests to expect:
-- Image file → `image-ocr`, `image-captioning`, `image-objects`, `tags`, `search-keyword`, `search-semantic`
-- Audio file → `speech-recognition`, `speaker-embedding`, `tags`, `search-keyword`, `search-semantic`
-- URL file → `url-crawl-content`, `url-crawl-screenshot`, `url-crawl-summary`, `tags`, `search-keyword`, `search-semantic`
+- Image file → `image-ocr`, `image-captioning`, `image-objects`, `tags`, `search-semantic`
+- Audio file → `speech-recognition`, `speaker-embedding`, `tags`, `search-semantic`
+- URL file → `url-crawl-content`, `url-crawl-screenshot`, `url-crawl-summary`, `tags`, `search-semantic`
 
 This means:
 1. **`skipped` status** = "This digester doesn't apply to this file type" (deterministic)
@@ -217,15 +219,12 @@ Digesters execute in registration order. Order matters for dependencies:
     - Outputs: `tags`
     - Generates semantic tags for file content
 
-12. **SearchKeywordDigester** (depends on text content)
-    - Label: "Keyword Search"
-    - Outputs: `search-keyword`
-    - Indexes content in Meilisearch for full-text search
-
-13. **SearchSemanticDigester** (depends on text content)
+12. **SearchSemanticDigester** (depends on text content)
     - Label: "Semantic Search"
     - Outputs: `search-semantic`
     - Generates embeddings and indexes in Qdrant for vector search
+
+> Keyword search is not a digester. The textindex worker (`backend/workers/textindex/indexer.go`) reacts to file change events and writes synchronously into the FTS5 virtual table `files_fts` via `db.IndexFile`, `db.DeleteFileFromIndex`, `db.RenameFileInIndex`, and `db.RenamePrefixInIndex`.
 
 **Dependency Pattern**: Later digesters can safely read outputs from earlier digesters because `processFile()` loads fresh digest state at the start of each iteration.
 
@@ -419,7 +418,6 @@ Each file type has a deterministic set of digesters that apply to it. This is ba
 | image-objects | - | - | yes | - | - |
 | url-crawl-summary | yes | - | - | - | - |
 | tags | yes | yes | yes | yes | yes |
-| search-keyword | yes | yes | yes | yes | yes |
 | search-semantic | yes | yes | yes | yes | yes |
 
 ## Cascading Resets
@@ -462,14 +460,6 @@ flowchart TD
         UCSUM --> |"cascades"| TAGS
         SRSUM --> |"cascades"| TAGS
 
-        SR --> |"cascades"| SK["search-keyword"]
-        IO --> |"cascades"| SK
-        IC --> |"cascades"| SK
-        IOBJ --> |"cascades"| SK
-        DTM --> |"cascades"| SK
-        UCC --> |"cascades"| SK
-        SRSUM --> |"cascades"| SK
-
         SR --> |"cascades"| SS["search-semantic"]
         IO --> |"cascades"| SS
         IC --> |"cascades"| SS
@@ -493,7 +483,6 @@ flowchart TD
     style UCSUM fill:#fff3e0
 
     style TAGS fill:#e8f5e9
-    style SK fill:#e8f5e9
     style SS fill:#e8f5e9
 ```
 
@@ -503,7 +492,7 @@ flowchart TD
 |-------|-----------|-------------|
 | **1** | `speech-recognition`, `image-ocr`, `image-captioning`, `image-objects`, `doc-to-markdown`, `doc-to-screenshot`, `url-crawl` | Content extraction from source files |
 | **2** | `speaker-embedding`, `speech-recognition-cleanup`, `speech-recognition-summary`, `url-crawl-summary` | Depends on Round 1 outputs |
-| **3** | `tags`, `search-keyword`, `search-semantic` | Final processing, cascaded from any content producer |
+| **3** | `tags`, `search-semantic` | Final processing, cascaded from any content producer |
 
 ### Reset Triggers
 
@@ -512,16 +501,18 @@ Each digester declares which downstream digesters should be reset when it comple
 ```typescript
 // Hardcoded reset mappings
 const CASCADING_RESETS: Record<string, string[]> = {
-  'url-crawl-content': ['url-crawl-summary', 'tags', 'search-keyword', 'search-semantic'],
-  'doc-to-markdown': ['tags', 'search-keyword', 'search-semantic'],
-  'image-ocr': ['tags', 'search-keyword', 'search-semantic'],
-  'image-captioning': ['tags', 'search-keyword', 'search-semantic'],
-  'image-objects': ['tags', 'search-keyword', 'search-semantic'],
-  'speech-recognition': ['speaker-embedding', 'speech-recognition-cleanup', 'speech-recognition-summary', 'tags', 'search-keyword', 'search-semantic'],
+  'url-crawl-content': ['url-crawl-summary', 'tags', 'search-semantic'],
+  'doc-to-markdown': ['tags', 'search-semantic'],
+  'image-ocr': ['tags', 'search-semantic'],
+  'image-captioning': ['tags', 'search-semantic'],
+  'image-objects': ['tags', 'search-semantic'],
+  'speech-recognition': ['speaker-embedding', 'speech-recognition-cleanup', 'speech-recognition-summary', 'tags', 'search-semantic'],
   'url-crawl-summary': ['tags'],  // Summary can improve tags
-  'speech-recognition-summary': ['tags', 'search-keyword', 'search-semantic'],
+  'speech-recognition-summary': ['tags', 'search-semantic'],
 };
 ```
+
+> The textindex worker re-indexes the file independently (synchronously, on the next file change event). It does not need a digester reset entry.
 
 ### Reset Behavior
 
@@ -536,17 +527,17 @@ When a digester completes:
 **Example Flow (Image with OCR)**:
 1. `image-ocr` runs, finds text "Meeting Notes 2024"
 2. Coordinator sees `image-ocr` completed with content
-3. Resets `tags`, `search-keyword`, `search-semantic` to `todo`
+3. Resets `tags`, `search-semantic` to `todo`
 4. `tags` runs, generates tags from OCR text
-5. `search-keyword` runs, indexes OCR text
+5. textindex worker observes the file change and updates the FTS5 row
 
 **Example Flow (Image without OCR text)**:
 1. `image-ocr` runs, finds no text (content is empty/null)
 2. `image-captioning` runs, generates "A photo of a sunset over the ocean"
 3. Coordinator sees `image-captioning` completed with content
-4. Resets `tags`, `search-keyword`, `search-semantic` to `todo`
+4. Resets `tags`, `search-semantic` to `todo`
 5. `tags` runs, generates tags from caption
-6. `search-keyword` runs, indexes caption
+6. textindex worker re-indexes the FTS5 row using the latest digest content
 
 ## Dependent Digester Behavior
 
@@ -570,29 +561,31 @@ This ensures:
 - **`completed` with null content**: File type is compatible but no content was produced
 
 ```typescript
-// Example: SearchKeywordDigester for an image
+// Example: SearchSemanticDigester for an image
 async digest(filePath, file, existingDigests, db) {
   const text = getTextContent(file, existingDigests);
 
   if (!text) {
     // No text available - complete with no content (don't skip)
     return [{
-      digester: 'search-keyword',
+      digester: 'search-semantic',
       status: 'completed',
       content: null,  // Explicitly null
       error: null,
     }];
   }
 
-  // Has text - index it
-  await indexToMeilisearch(filePath, text);
+  // Has text - embed and upsert to Qdrant
+  await embedAndUpsert(filePath, text);
   return [{
-    digester: 'search-keyword',
+    digester: 'search-semantic',
     status: 'completed',
     content: JSON.stringify({ indexed: true, wordCount: text.split(' ').length }),
   }];
 }
 ```
+
+> Keyword indexing for the same file is handled out-of-band by the textindex worker against SQLite FTS5; it doesn't sit in the digester pipeline.
 
 ### Getting Text Content
 
@@ -660,7 +653,7 @@ Coordinator tracks each output independently with its own status.
 
 ### Issue: Search digesters not running for documents
 
-**Symptom**: doc-to-markdown completes, but search-keyword/search-semantic show "skipped" or "failed"
+**Symptom**: doc-to-markdown completes, but search-semantic shows "skipped" or "failed"
 
 **Previous Cause (Fixed)**: Digesters were marked as "skipped" when dependencies weren't ready, making them permanently terminal even when dependencies later succeeded.
 
@@ -741,7 +734,7 @@ Coordinator tracks each output independently with its own status.
    async digest(...): Promise<DigestInput[]> {
      const text = getTextContent(file, existingDigests);
      if (!text) {
-       return [{ digester: 'search-keyword', status: 'completed', content: null }];
+       return [{ digester: 'search-semantic', status: 'completed', content: null }];
      }
      // ... index text
    }

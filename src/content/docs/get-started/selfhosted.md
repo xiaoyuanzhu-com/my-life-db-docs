@@ -16,7 +16,6 @@ my-life-db/
 ├── .env                     # (required, for environment variables)
 ├── data/                    # (required, user data dir)
 ├── .my-life-db/             # (required, app data dir)
-│   └── meilisearch/
 ├── .claude/                 # (optional, if you use the Claude Code integration and want to persist its data)
 ├── .claude.json
 ├── .claude.json.backup
@@ -28,7 +27,7 @@ my-life-db/
 you will need:
 
 ```bash
-mkdir -p data .my-life-db/meilisearch .claude .ssh .config/git
+mkdir -p data .my-life-db .claude .ssh .config/git
 touch .claude.json .claude.json.backup
 ```
 
@@ -49,15 +48,6 @@ services:
       - ./.claude.json.backup:/home/xiaoyuanzhu/.claude.json.backup
       - ./.ssh:/home/xiaoyuanzhu/.ssh
       - ./.config:/home/xiaoyuanzhu/.config
-    env_file: .env
-    depends_on:
-      - meilisearch
-    restart: unless-stopped
-
-  meilisearch:
-    image: getmeili/meilisearch:v1.27.0
-    volumes:
-      - ./.my-life-db/meilisearch:/meili_data
     env_file: .env
     restart: unless-stopped
 ```
@@ -83,12 +73,6 @@ MLD_AUTH_MODE=none
 # MLD_OAUTH_ISSUER_URL=https://your-oidc-provider/.well-known/openid-configuration
 # MLD_OAUTH_REDIRECT_URI=https://your-domain/api/oauth/callback
 # MLD_EXPECTED_USERNAME=your-username
-
-# ===== Search =====
-MEILI_HOST=http://meilisearch:7700
-MEILI_API_KEY=change_me_to_a_random_string
-MEILI_MASTER_KEY=change_me_to_a_random_string
-MEILI_ENV=production
 
 # ===== AI (optional) =====
 # OPENAI_API_KEY=sk-...

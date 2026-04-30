@@ -2,7 +2,7 @@
 title: "Inbox Agent Architecture"
 ---
 
-> Last edit: 2026-02-26
+> Last edit: 2026-04-30
 
 This document describes the agent architecture for the MyLifeDB inbox, leveraging **Claude's native tool use** pattern.
 
@@ -25,7 +25,7 @@ The system has two distinct search capabilities:
 
 | Layer | What it is | How it works |
 |-------|-----------|--------------|
-| **App search** | Keyword + semantic search | Meilisearch + Qdrant, already built, used by `/api/search` |
+| **App search** | Keyword + semantic search | SQLite FTS5 (`files_fts`, `wangfenjin/simple` tokenizer) + Qdrant, already built, used by `/api/search` |
 | **Agent search** | Intelligent file understanding | Claude reasons over file content, folder structure, and guidelines using tools -- this is the new capability |
 
 The agent does NOT wrap the existing app search. The agent IS the new search -- it uses Claude's reasoning over `get_file`, `get_folder_tree`, and `read_guideline` tools to understand files and decide where they belong.

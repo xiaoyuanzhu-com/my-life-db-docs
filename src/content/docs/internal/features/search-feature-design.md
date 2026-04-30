@@ -2,7 +2,7 @@
 title: "Search Feature Design"
 ---
 
-> Last edit: 2026-02-26
+> Last edit: 2026-04-30
 
 **Version**: 1.0
 **Status**: Implementation Phase
@@ -210,7 +210,7 @@ src/
 flowchart TD
     A["User Types"] --> B
     B["OmniInput Component\n- Detect input change\n- Calculate adaptive debounce\n- Cancel previous search"] -->|"after debounce"| C
-    C["GET /api/search?q=...\n- Validate query (min 2 chars)\n- Search Meilisearch\n- Enrich with files table"] --> D
+    C["GET /api/search?q=...\n- Validate query (min 2 chars)\n- Search SQLite FTS5 (db.SearchFTS)\n- Enrich with files table"] --> D
     D["SearchResults Component\n- Render result cards\n- Handle interactions\n- Manage pagination"]
 ```
 
@@ -269,7 +269,7 @@ GET /api/search?q=meeting%20notes&limit=20&offset=0&path=notes/
 interface SearchResponse {
   results: SearchResultItem[];
   pagination: {
-    total: number;        // Total matching results (from Meilisearch)
+    total: number;        // Total matching results (from FTS5)
     limit: number;
     offset: number;
     hasMore: boolean;     // Whether more results are available
@@ -277,7 +277,7 @@ interface SearchResponse {
   query: string;          // Echo back the query
   timing: {
     totalMs: number;      // Total search time
-    searchMs: number;     // Meilisearch query time
+    searchMs: number;     // SQLite FTS5 query time
     enrichMs: number;     // Data enrichment time
   };
 }
@@ -299,8 +299,8 @@ interface SearchResultItem {
   tags: string | null;    // Comma-separated tags
 
   // Search metadata
-  score: number;          // Relevance score from Meilisearch
-  snippet: string;        // Text preview with match context
+  score: number;          // Relevance score from SQLite FTS5 (bm25)
+  snippet: string;        // Text preview with match context (with <em>...</em> markup)
 }
 ```
 
@@ -434,40 +434,22 @@ interface ErrorResponse {
 
 ## 6. Ranking Strategy
 
-### 6.1 Phase 1: Meilisearch Only
+### 6.1 Phase 1: SQLite FTS5 Only
 
 **Current Implementation:**
-- Use Meilisearch's built-in relevance ranking
-- Searches across indexed fields: `content`, `summary`, `tags`, `filePath`
-- Returns results sorted by relevance score (BM25 algorithm)
+- Use SQLite FTS5 with the `wangfenjin/simple` tokenizer (jieba CJK + pinyin + English) — the same tokenizer WeChat uses for full-text search.
+- Searches across indexed fields concatenated into the FTS5 virtual table `files_fts`: `content`, `summary`, `tags`, `filePath`.
+- Returns results sorted by FTS5 `bm25()` score; snippets are produced via FTS5's `snippet()` with `<em>...</em>` markup.
 
-**Ranking Factors (Meilisearch):**
+**Ranking Factors (FTS5 bm25):**
 1. **Term frequency**: How often query terms appear in document
-2. **Field weights**: Matches in `summary` > `tags` > `content` > `filePath`
-3. **Position**: Earlier matches ranked higher
-4. **Typo tolerance**: Handles misspellings (1-2 char edits)
-5. **Proximity**: Terms appearing close together ranked higher
+2. **Field weights**: Tunable via the `bm25()` weights argument (currently weighted so `summary` > `tags` > `content` > `filePath`)
+3. **Inverse document frequency**: Rare terms score higher
+4. **Document length normalization**: Shorter matching documents rank higher
 
-**Configuration:**
-```typescript
-// Meilisearch index settings
-{
-  searchableAttributes: [
-    'summary',      // Highest priority
-    'tags',
-    'content',
-    'filePath'
-  ],
-  rankingRules: [
-    'words',        // Number of matching query terms
-    'typo',         // Typo tolerance
-    'proximity',    // Term proximity
-    'attribute',    // Field weight
-    'sort',         // Custom sorting (future)
-    'exactness'     // Exact matches
-  ]
-}
-```
+**Notes:**
+- Typo tolerance is not provided by FTS5; the `simple` tokenizer's pinyin support partially mitigates this for Chinese.
+- Proximity is implicitly handled by FTS5 phrase / NEAR queries when the API forms them.
 
 ### 6.2 Hybrid Search (Implemented)
 
@@ -484,28 +466,26 @@ The main `/api/search` endpoint uses an adaptive hybrid approach that combines b
 #### Merge Strategy (for ≤10 word queries)
 
 **Step 1: Parallel Fetch**
-```typescript
+```go
 // Fetch from both sources in parallel
-const [meiliResult, qdrantHits] = await Promise.all([
-  meilisearch.search(query, { limit: limit * 2 }),
-  qdrant.search(embedding, { limit: limit * 2, scoreThreshold: 0.7 })
-]);
+ftsHits, _   := db.SearchFTS(ctx, query, limit*2)
+qdrantHits, _ := qdrant.Search(ctx, embedding, limit*2, 0.7)
 ```
 
 **Step 2: File-Path Deduplication (Union)**
-```typescript
-const filePathMap = new Map<string, SearchHit>();
+```go
+seen := map[string]SearchHit{}
 
-// Add Meilisearch results first (prioritized)
-for (const hit of meiliResult.hits) {
-  filePathMap.set(hit.filePath, hit);
+// Add FTS5 results first (prioritized)
+for _, h := range ftsHits {
+    seen[h.FilePath] = h
 }
 
-// Add Qdrant results that aren't already in Meilisearch
-for (const hit of qdrantHits) {
-  if (!filePathMap.has(hit.payload.filePath)) {
-    filePathMap.set(hit.payload.filePath, convertToSearchHit(hit));
-  }
+// Add Qdrant results that aren't already in FTS5
+for _, h := range qdrantHits {
+    if _, ok := seen[h.Payload.FilePath]; !ok {
+        seen[h.Payload.FilePath] = convertToSearchHit(h)
+    }
 }
 ```
 
@@ -569,7 +549,7 @@ This endpoint is available but not currently used by the main search UI.
 
 ### Phase 1: MVP (Complete)
 - [x] Design document
-- [x] `/api/search` endpoint with Meilisearch
+- [x] `/api/search` endpoint backed by SQLite FTS5 (`db.SearchFTS`)
 - [x] Adaptive debounce in OmniInput
 - [x] SearchResults component with file cards
 - [x] Hybrid search with Qdrant (semantic)
@@ -686,7 +666,7 @@ Semantic search results also display:
 - **Pagination**: True infinite scroll (auto-loads at 200px threshold)
 
 ### Security
-- **Input Validation**: Sanitize query to prevent injection (Meilisearch escapes automatically)
+- **Input Validation**: Sanitize query to prevent FTS5 syntax errors (the search layer escapes special characters and quotes user terms)
 - **Rate Limiting**: 60 requests/minute per session (future)
 - **Content Security**: Only return file metadata, not full content (privacy)
 - **Path Traversal**: Reject queries with `..` or absolute paths

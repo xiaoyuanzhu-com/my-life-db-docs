@@ -2,7 +2,7 @@
 title: "Server Component"
 ---
 
-> Last edit: 2026-02-26
+> Last edit: 2026-04-30
 
 The Server struct owns and coordinates all application components, managing their lifecycle and interconnections.
 
@@ -328,7 +328,6 @@ type Config struct {
     AppDataDir  string
 
     // External services
-    MeiliHost   string
     QdrantHost  string
     OpenAIAPIKey string
     // ... etc

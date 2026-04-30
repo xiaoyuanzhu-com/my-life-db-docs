@@ -2,7 +2,7 @@
 title: "Technical Design Document"
 ---
 
-> Last edit: 2026-02-26
+> Last edit: 2026-04-30
 
 ## Table of Contents
 
@@ -73,9 +73,8 @@ graph LR
 
     subgraph L4["Storage & Infra"]
         FileSystem["Filesystem (inbox, library)"]
-        SQLiteDB["SQLite (better-sqlite3)"]
+        SQLiteDB["SQLite (WAL) + FTS5 (files_fts)"]
         SQLAR["SQLAR Archives"]
-        Meili["Meilisearch"]
     end
 
     OmniInput --> ApiRoutes
@@ -94,7 +93,6 @@ graph LR
     DigestCoordinator --> SQLiteDB
     DigestCoordinator --> SQLAR
     TaskRuntime --> SQLiteDB
-    SearchBridge --> Meili
     SearchBridge --> SQLiteDB
 
     DigestCoordinator --> TaskRuntime
@@ -105,8 +103,8 @@ graph LR
 
 - **Experience layer:** React 19 components (OmniInput, inbox cards, library tree, file inspector, search overlay) fetch JSON from API routes and keep minimal local state.
 - **App Router layer:** Handles routing, validation, and streaming responses. API routes live beside the UI and call into domain services.
-- **Domain + background layer:** `src/lib/db/*` exposes catalog queries, `src/lib/digest/*` registers digesters, `src/lib/search/*` syncs with Meilisearch, and `src/lib/task-queue/*` powers background execution.
-- **Storage & infra layer:** User directories hold raw files, SQLite + SQLAR hold metadata and binary digests, and Meilisearch indexes the rebuildable textual view.
+- **Domain + background layer:** `backend/db/*` exposes catalog queries (including FTS5 keyword search via `db.SearchFTS()`), `backend/workers/digest/*` registers digesters, `backend/workers/textindex/*` keeps the FTS5 virtual table `files_fts` in sync with file change events, and the task runtime powers background execution.
+- **Storage & infra layer:** User directories hold raw files; SQLite + SQLAR hold metadata, binary digests, and the FTS5 keyword index for the rebuildable textual view.
 
 ---
 
@@ -225,7 +223,7 @@ Notification types: `inbox-changed`, `pin-changed`
 
 ## 4. Technology Stack
 
-Single stack across client and server: React Router 7 with React 19 + TypeScript, Tailwind + shadcn UI primitives, Node 20 runtime with better-sqlite3 for SQLite access, optional Meilisearch for keyword search, and zero additional backend services.
+Single stack across client and server: React Router 7 with React 19 + TypeScript, Tailwind + shadcn UI primitives, and a Go 1.25 backend (Gin + mattn/go-sqlite3, CGO required) using SQLite FTS5 with the `wangfenjin/simple` tokenizer for keyword search. Qdrant is the only external service in the search path; everything else runs in-process.
 
 ### 4.1 Dark Mode Implementation
 
@@ -279,7 +277,7 @@ className="bg-primary/5 border-primary/20"
 
 ## 5. Data Models
 
-Entries, spaces, clusters, insights, and principles no longer exist. The database now mirrors the filesystem (`files`), digest output (`digests` + `sqlar`), search replicas (`meili_documents`), operational state (`tasks`), user preferences (`settings`), and schema tracking (`schema_version`).
+Entries, spaces, clusters, insights, and principles no longer exist. The database now mirrors the filesystem (`files`), digest output (`digests` + `sqlar`), the keyword search index (`files_fts`, an FTS5 virtual table), operational state (`tasks`), user preferences (`settings`), and schema tracking (`schema_version`). Semantic search continues to live in Qdrant.
 
 ```mermaid
 classDiagram
@@ -330,22 +328,13 @@ classDiagram
       completed_at
     }
 
-    class MeiliDocuments {
-      document_id PK
-      file_path FK
-      source_type
-      full_text
-      content_hash
-      word_count
-      content_type
-      metadata_json
-      meili_status
-      meili_task_id
-      meili_indexed_at
-      meili_error
-      created_at
-      updated_at
+    class FilesFTS {
+      file_path
+      content
+      summary
+      tags
     }
+    note for FilesFTS "FTS5 virtual table\ntokenizer: simple\n(jieba CJK + pinyin + English)"
 
     class Settings {
       key PK
@@ -362,15 +351,15 @@ classDiagram
     Digests --> Files : references
     Sqlar --> Digests : stores binary outputs
     Tasks --> Digests : payload references
-    MeiliDocuments --> Files : references
+    FilesFTS --> Files : indexes
 ```
 
 - **Files:** Rebuildable catalog of every folder and file under `MY_DATA_DIR`, including hashes for sub-10MB files.
 - **Digests:** Status tracker for every enrichment a file has undergone (summary, tags, screenshot, OCR, etc.).
 - **SQLAR:** Stores binary digest payloads such as screenshots or OCR bundles without polluting the user filesystem.
 - **Tasks:** Durable queue with retry tracking; payloads mention file paths or digest IDs instead of legacy item IDs.
-- **Meili documents:** Mirror the textual view of each file to Meilisearch; rows are regenerated whenever digests change.
-- **Settings:** Holds local configuration such as search host overrides, log level, and vendor credentials.
+- **Files FTS:** SQLite FTS5 virtual table (`files_fts`) holding the textual view of each file (path, content, summary, tags) tokenized by `wangfenjin/simple` (jieba CJK + pinyin + English). Maintained synchronously by the textindex worker on file change events.
+- **Settings:** Holds local configuration such as log level and vendor credentials.
 - **Schema version:** Records applied migrations so schema evolution can be coordinated with scanners/digesters.
 
 ---
@@ -386,7 +375,7 @@ classDiagram
 | `GET /api/library/file-info` | Returns metadata plus every digest for a file. | Drives the file inspector page to show enrichment status. |
 | `GET /api/digest/[...path]` | Reports digest status for any file path. | Wraps `getDigestStatusView` for UI polling. |
 | `POST /api/digest/[...path]` | Forces digesters to run for a specific file. | Instantiates `DigestCoordinator` and enqueues/runs applicable digesters. |
-| `GET /api/search` | Keyword search backed by Meilisearch + digest metadata. | Supports query, pagination, optional MIME/path filters, and returns enriched file payloads. |
+| `GET /api/search` | Keyword search backed by SQLite FTS5 (`db.SearchFTS()`) + digest metadata; semantic results from Qdrant are merged when available. | Supports query, pagination, optional MIME/path filters, and returns enriched file payloads. The hits include `<em>...</em>`-marked snippets. |
 | `GET/POST /api/tasks` | Lists, creates, or updates tasks for background work. | Used internally by digesters and by the settings UI for manual retries. |
 | `GET /api/tasks/stats` and `/api/tasks/worker/*` | Operational endpoints to inspect/pause/resume the worker. | Provides visibility into background processing. |
 | `GET/PUT /api/settings` | Reads or updates local configuration. | Captures data root, vendor settings, and UI preferences. |
@@ -399,7 +388,7 @@ classDiagram
 |-------|--------------------|---------------------------|
 | Source of truth | Keep legacy `items` table vs. rely on filesystem | Filesystem chosen: simpler mental model, avoids ID drift, and lets other tools edit data without migrations. |
 | Digest storage | Sidecar folders, object storage, or SQLAR | SQLAR keeps derived artifacts in SQLite so they can be vacuumed, compressed, and versioned atomically. |
-| Search replica | SQLite FTS, Meilisearch, or hybrid | Dedicated Meilisearch index offers BM25 scoring + highlighting while SQLite remains the authoritative catalog. |
+| Search replica | SQLite FTS5, Meilisearch, or hybrid | SQLite FTS5 with the `wangfenjin/simple` tokenizer chosen: keeps the keyword index in-process (no extra service to ship/operate), supports CJK + English + pinyin out of the box, atomic with the rest of the database, and provides BM25 scoring + `snippet()` highlighting via `<em>...</em>` markers. Qdrant remains for semantic search. |
 | App data folder | Hidden `.app/` vs. visible `app/` | Visible `app/` directory reinforces transparency and makes debugging easy. |
 | Task infrastructure | External worker (BullMQ, Temporal) vs. embedded queue | Embedded queue fits offline-first needs, keeps dependencies local, and persists in SQLite. |
 | Hash strategy | Always hash vs. size-only vs. adaptive | Adaptive hashing (<10MB) balances change detection accuracy with scan performance for large binaries. |
@@ -454,11 +443,10 @@ File deletion uses a centralized `deleteFile()` function (`app/.server/files/del
 2. **files table** - Delete file record (and children for folders)
 3. **digests table** - Delete all digest rows for the path
 4. **sqlar table** - Delete binary artifacts using `{pathHash}/` prefix
-5. **meili_documents table** - Delete local tracking row
+5. **files_fts (FTS5)** - `db.DeleteFileFromIndex(path)` removes the row in the same transaction as the file delete
 6. **qdrant_documents table** - Delete local tracking rows
 7. **tasks table** - Delete pending tasks for the file
-8. **External Meilisearch** - Enqueue deletion task via `enqueueMeiliDelete()`
-9. **External Qdrant** - Enqueue deletion task via `enqueueQdrantDelete()`
+8. **External Qdrant** - Enqueue deletion task via `enqueueQdrantDelete()`
 
 **Auto-cleanup via CASCADE:**
 - `pins` table - FK to `files.path` with `ON DELETE CASCADE`
@@ -483,7 +471,7 @@ File deletion uses a centralized `deleteFile()` function (`app/.server/files/del
 ### 8.8 Misc
 
 - **Schema evolution:** Migrations append to `schema_version`, and UI badges draw attention to stale records so users can trigger re-processing.
-- **Settings + vendors:** `/api/settings` persists data dir overrides, Meilisearch hosts, AI vendor preferences, and log levels; initialization (`src/lib/init.ts`) reads them to configure services.
+- **Settings + vendors:** `/api/settings` persists data dir overrides, AI vendor preferences, and log levels; initialization reads them to configure services.
 - **App initialization:** `initializeApp()` (wired through instrumentation) ensures digesters, task queue, scanner, database migrations, and search indices come online exactly once per server boot.
 
 ---

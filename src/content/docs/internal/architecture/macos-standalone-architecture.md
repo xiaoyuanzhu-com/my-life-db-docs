@@ -2,7 +2,7 @@
 title: macOS Standalone Architecture
 ---
 
-> Last edit: 2026-02-26
+> Last edit: 2026-04-30
 
 ## System Overview
 
@@ -30,7 +30,6 @@ graph TB
     SQLITE --> APPDATA
 
     subgraph "Optional: Local Services"
-        MEILI[Meilisearch<br/>Full-text Search]
         QDRANT[Qdrant<br/>Vector Search]
     end
 
@@ -44,7 +43,6 @@ graph TB
         CLAUDE[Claude CLI<br/>Subprocess]
     end
 
-    APP -.->|optional| MEILI
     APP -.->|optional| QDRANT
     APP -.->|optional| OPENAI
     APP -.->|optional| HAID
@@ -66,7 +64,6 @@ graph LR
     end
 
     subgraph "Layer 2: Enhanced"
-        L2A[Meilisearch]
         L2B[Qdrant]
     end
 
@@ -136,7 +133,6 @@ graph TB
         SERVER --> CLAUDEPKG[claude/<br/>Session Manager]
 
         API --> VENDORS[vendors/]
-        VENDORS --> V_MEILI[meilisearch.go]
         VENDORS --> V_QDRANT[qdrant.go]
         VENDORS --> V_OPENAI[openai.go]
         VENDORS --> V_HAID[haid.go]
@@ -162,7 +158,7 @@ graph TB
 graph TB
     subgraph "Mode 1: Connect to Remote Server"
         M1_APP[macOS App<br/>Frontend Only] -->|HTTPS| M1_SERVER[Remote Server<br/>your-server.com]
-        M1_SERVER --> M1_SERVICES[All Services<br/>Meilisearch, Qdrant, etc.]
+        M1_SERVER --> M1_SERVICES[All Services<br/>Qdrant, OpenAI, HAID, etc.]
     end
 
     subgraph "Mode 2: Connect to Cloud Service"
@@ -174,7 +170,7 @@ graph TB
         M3_APP[macOS App<br/>Full Package]
         M3_APP --> M3_BACKEND[Embedded Backend<br/>localhost:12345]
         M3_BACKEND --> M3_SQLITE[(SQLite)]
-        M3_BACKEND -.->|optional| M3_DOCKER[Docker Desktop<br/>Meilisearch + Qdrant]
+        M3_BACKEND -.->|optional| M3_DOCKER[Docker Desktop<br/>Qdrant]
         M3_BACKEND -.->|optional| M3_APIS[Cloud APIs<br/>OpenAI, HAID]
     end
 ```
@@ -188,7 +184,7 @@ graph LR
     end
 
     subgraph "Tier 2: Search"
-        T2[Tier 1 + Meilisearch + Qdrant]
+        T2[Tier 1 + Qdrant<br/>(keyword search via in-process SQLite FTS5)]
     end
 
     subgraph "Tier 3: AI"
@@ -232,7 +228,6 @@ sequenceDiagram
     participant Backend
     participant SQLite
     participant FSWatcher
-    participant Meilisearch
     participant OpenAI
 
     User->>Browser: Open localhost:12345
@@ -246,10 +241,7 @@ sequenceDiagram
 
     FSWatcher->>Backend: File changed event
     Backend->>SQLite: Queue digest
-
-    alt Meilisearch Available
-        Backend->>Meilisearch: Index content
-    end
+    Backend->>SQLite: Update files_fts (FTS5) synchronously
 
     alt OpenAI Available
         Backend->>OpenAI: Analyze intent
@@ -295,7 +287,6 @@ flowchart TD
 | Go Binary | ✅ | ✅ | - | CGO required for SQLite |
 | React Frontend | ✅ | ✅ | - | Pre-built static files |
 | SQLite | ✅ | ✅ | - | Embedded via CGO |
-| Meilisearch | ❌ | ❌ | Docker/Standalone | ~50MB binary |
 | Qdrant | ❌ | ❌ | Docker/Standalone | ~100MB binary |
 | OpenAI API | ❌ | - | Cloud | User provides API key |
 | HAID | ❌ | - | Cloud | Your hosted service |

@@ -2,7 +2,7 @@
 title: "Filesystem Service v2 Design"
 ---
 
-> Last edit: 2026-02-26
+> Last edit: 2026-04-30
 
 **Date:** 2026-01-31
 **Status:** Implementation Complete (Phase 7 testing remaining)
@@ -506,7 +506,7 @@ Currently, file operations are handled by **multiple independent code paths** th
 
 This matrix shows exactly which tables are updated by each operation:
 
-| Operation | files | digests | pins | meili_documents | qdrant_documents | Notes |
+| Operation | files | digests | pins | files_fts (FTS5) | qdrant_documents | Notes |
 |-----------|:-----:|:-------:|:----:|:---------------:|:----------------:|-------|
 | **CREATE (API)** | ✅ Upsert | - | - | - | - | Hash computed, notifies digest worker |
 | **CREATE (Watcher)** | ✅ Upsert | - | - | - | - | Via `processExternalFile()` |
@@ -521,18 +521,18 @@ This matrix shows exactly which tables are updated by each operation:
 | **RENAME (API)** | ✅ Update | ✅ Update | ✅ Update | ✅ Update | ✅ Update | Uses `RenameFilePath(s)` |
 | **MOVE (API)** | ✅ Update | ✅ Update | ✅ Update | ✅ Update | ✅ Update | Uses `RenameFilePath(s)` |
 
-**Note**: Search index documents (`meili_documents`, `qdrant_documents`) are only created by the digest worker when processing files. The cascade operations above ensure they're properly updated/deleted when files move or are deleted.
+**Note**: The keyword search index (`files_fts`, FTS5) is updated synchronously in the same transaction as the file row by the textindex worker — there is no longer a separate staging table. `qdrant_documents` rows are created by the digest worker when processing files. The cascade operations above ensure both are properly updated/deleted when files move or are deleted.
 
 ### Issues Identified (All Fixed)
 
 #### ~~Issue 1: Search Indices Never Updated on Delete/Move~~ ✅ FIXED
 
-~~When files are deleted or moved, `meili_documents` and `qdrant_documents` tables are NOT updated.~~
+~~When files are deleted or moved, the keyword index and `qdrant_documents` table were NOT updated.~~
 
-**Solution**: All cascade functions now update meili/qdrant:
-- `DeleteFileWithCascade()` - deletes from all tables
-- `MoveFileAtomic()` - updates file_path in all tables
-- `RenameFilePath(s)` - updates file_path in all tables
+**Solution**: All cascade functions now update both indices atomically:
+- `DeleteFileWithCascade()` — deletes from all tables and calls `db.DeleteFileFromIndex()`
+- `MoveFileAtomic()` — updates `file_path` in all tables and calls `db.RenameFileInIndex()` / `db.RenamePrefixInIndex()`
+- `RenameFilePath(s)` — same as above for the API path
 
 #### ~~Issue 2: Watcher Delete Doesn't Cascade~~ ✅ FIXED
 
@@ -576,7 +576,7 @@ func (s *Service) DeleteFile(ctx context.Context, path string) error {
         return fmt.Errorf("failed to delete file: %w", err)
     }
 
-    // 3. Cascade delete from DB (files, digests, pins, meili, qdrant)
+    // 3. Cascade delete from DB (files, digests, pins, files_fts (FTS5), qdrant)
     if err := s.cfg.DB.DeleteFileWithCascade(path); err != nil {
         return fmt.Errorf("failed to delete from database: %w", err)
     }
@@ -615,7 +615,7 @@ func (s *Service) MoveFile(ctx context.Context, oldPath, newPath string) error {
     metadata, _ := s.processor.ComputeMetadata(ctx, newPath)
     record := s.buildFileRecord(newPath, info, metadata)
 
-    // 4. Atomic DB update (files, digests, pins, meili, qdrant)
+    // 4. Atomic DB update (files, digests, pins, files_fts (FTS5), qdrant)
     if err := s.cfg.DB.MoveFileAtomic(oldPath, newPath, record); err != nil {
         return fmt.Errorf("failed to update database: %w", err)
     }
@@ -655,10 +655,12 @@ All code paths use `fs.Service` methods:
 ### Migration Plan
 
 **~~Phase 1: Fix Cascade Operations~~ ✅ DONE**
-1. ~~Update `DeleteFileWithCascade()` to include meili/qdrant~~
-2. ~~Update `MoveFileAtomic()` to include meili/qdrant~~
-3. ~~Update `RenameFilePath(s)` to include meili/qdrant~~
+1. ~~Update `DeleteFileWithCascade()` to include the keyword index and qdrant~~
+2. ~~Update `MoveFileAtomic()` to include the keyword index and qdrant~~
+3. ~~Update `RenameFilePath(s)` to include the keyword index and qdrant~~
 4. ~~Update watcher delete to use cascade~~
+
+> The keyword index column originally referred to `meili_documents`. After migration 026, the same cascade now writes through to the FTS5 virtual table `files_fts` via the `db.IndexFile` / `db.DeleteFileFromIndex` / `db.RenameFileInIndex` / `db.RenamePrefixInIndex` helpers in `backend/db/files_fts.go`.
 
 **Phase 2: Centralize via fs.Service**
 1. Add `DeleteFile()` method to `fs.Service`
@@ -712,9 +714,9 @@ Key points:
 | `db/files.go` | Add MoveFileAtomic | ✅ Done |
 | `db/files.go` | Add ListAllFilePaths | ✅ Done |
 | `db/files.go` | Add DeleteFileWithCascade | ✅ Done |
-| `db/files.go` | Cascade to meili/qdrant | ✅ Done |
-| `db/files.go` | MoveFileAtomic meili/qdrant | ✅ Done |
-| `db/files.go` | RenameFilePath(s) meili/qdrant | ✅ Done |
+| `db/files.go` | Cascade to files_fts (FTS5) / qdrant | ✅ Done |
+| `db/files.go` | MoveFileAtomic files_fts (FTS5) / qdrant | ✅ Done |
+| `db/files.go` | RenameFilePath(s) files_fts (FTS5) / qdrant | ✅ Done |
 | `api/files.go` | Use cascade delete | ✅ Done |
 
 ---
@@ -744,8 +746,8 @@ Key points:
 5. ~~Test with offline delete/move scenarios~~
 
 ### ~~Phase 5: Search Index Cascade~~ ✅ DONE
-1. ~~Update `DeleteFileWithCascade()` to delete from meili_documents, qdrant_documents~~
-2. ~~Update `MoveFileAtomic()` to update file_path in meili_documents, qdrant_documents~~
+1. ~~Update `DeleteFileWithCascade()` to delete from the keyword index (originally `meili_documents`, now FTS5 `files_fts`) and `qdrant_documents`~~
+2. ~~Update `MoveFileAtomic()` to update file_path in the keyword index and `qdrant_documents`~~
 3. ~~Update `RenameFilePath()` / `RenameFilePaths()` similarly~~
 4. ~~Update `watcher.go:handleDelete()` to use `DeleteFileWithCascade()`~~
 5. ~~Update `api/files.go:DeleteLibraryFile()` to use `DeleteFileWithCascade()`~~
@@ -958,9 +960,9 @@ This way:
 | `db/files.go` | MoveFileAtomic transaction | ✅ Done | Medium |
 | `db/files.go` | ListAllFilePaths | ✅ Done | Simple |
 | `db/files.go` | DeleteFileWithCascade (files/digests/pins) | ✅ Done | Simple |
-| `db/files.go` | DeleteFileWithCascade (meili/qdrant) | ✅ Done | Simple |
-| `db/files.go` | MoveFileAtomic (meili/qdrant) | ✅ Done | Simple |
-| `db/files.go` | RenameFilePath(s) (meili/qdrant) | ✅ Done | Simple |
+| `db/files.go` | DeleteFileWithCascade (files_fts / qdrant) | ✅ Done | Simple |
+| `db/files.go` | MoveFileAtomic (files_fts / qdrant) | ✅ Done | Simple |
+| `db/files.go` | RenameFilePath(s) (files_fts / qdrant) | ✅ Done | Simple |
 | `api/files.go` | Use DeleteFileWithCascade | ✅ Done | Simple |
 | `api/files.go` | Use fs.Service.DeleteFile for files | ✅ Done | Simple |
 | `fs/operations.go` | deleteFile uses DeleteFileWithCascade | ✅ Done | Simple |

@@ -2,9 +2,11 @@
 title: "External Service Integrations"
 ---
 
-> Last edit: 2026-02-26
+> Last edit: 2026-04-30
 
 The vendors package provides clients for external services used by the application.
+
+> **Note on full-text search.** Keyword search is no longer an external service — it lives in-process as a SQLite FTS5 virtual table (`files_fts`) using the `wangfenjin/simple` tokenizer (jieba CJK + pinyin + English). See the [Database Layer](/docs/internal/components/database-layer/) doc for details.
 
 ## Architecture
 
@@ -13,7 +15,6 @@ graph LR
     V["vendors/"] --> openai["openai.go\nOpenAI API (completions, embeddings, vision)"]
     V --> prompts["openai_prompts.go\nPrompt templates"]
     V --> qdrant["qdrant.go\nQdrant vector database"]
-    V --> meili["meilisearch.go\nMeilisearch full-text search"]
     V --> haid["haid.go\nHAID service (OCR, documents, embeddings)"]
     V --> aliyun["aliyun.go\nAliyun real-time ASR"]
 ```
@@ -24,7 +25,6 @@ graph LR
 |---------|---------|---------------|
 | OpenAI | Completions, embeddings, vision | `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL` |
 | Qdrant | Vector similarity search | `QDRANT_HOST`, `QDRANT_API_KEY`, `QDRANT_COLLECTION` |
-| Meilisearch | Full-text keyword search | `MEILI_HOST`, `MEILI_API_KEY`, `MEILI_INDEX` |
 | Aliyun | Real-time speech recognition | (configured in settings) |
 
 ## OpenAI
@@ -131,57 +131,6 @@ type QdrantSearchResult struct {
 }
 ```
 
-## Meilisearch
-
-Full-text search engine.
-
-### Configuration
-
-```bash
-MEILI_HOST=http://localhost:7700
-MEILI_API_KEY=
-MEILI_INDEX=mylifedb_files
-```
-
-### Functions
-
-```go
-// backend/vendors/meilisearch.go
-
-// Initialize index (called on startup)
-func MeiliEnsureIndex() error
-
-// Index documents
-func MeiliIndex(docs []MeiliDocument) error
-
-// Search
-func MeiliSearch(query string, limit int) ([]MeiliSearchResult, error)
-
-// Delete document
-func MeiliDelete(id string) error
-
-// Get index stats
-func MeiliGetStats() (*MeiliStats, error)
-```
-
-### Types
-
-```go
-type MeiliDocument struct {
-    ID       string            // Usually file path
-    Content  string            // Searchable text
-    Path     string
-    Title    string
-    Tags     []string
-}
-
-type MeiliSearchResult struct {
-    ID    string
-    Score float32
-    // ... matched document fields
-}
-```
-
 ## Aliyun
 
 Real-time speech recognition.
@@ -254,11 +203,6 @@ if cfg.OpenAIAPIKey != "" {
 // Qdrant
 if cfg.QdrantHost != "" {
     // Qdrant is available
-}
-
-// Meilisearch
-if cfg.MeiliHost != "" {
-    // Meilisearch is available
 }
 
 // HAID
@@ -351,10 +295,6 @@ func (d *ImageCaptioningDigester) Digest(...) ([]DigestInput, error) {
 ### Docker Services
 
 ```bash
-# Start Meilisearch
-./run.js meili
-# or: docker run -p 7700:7700 getmeili/meilisearch:v1.6
-
 # Start Qdrant
 ./run.js qdrant
 # or: docker run -p 6333:6333 qdrant/qdrant:latest
@@ -368,9 +308,6 @@ response, err := vendors.OpenAIComplete([]OpenAIMessage{
     {Role: "user", Content: "Hello"},
 })
 
-// Test Meilisearch
-err := vendors.MeiliEnsureIndex()
-
 // Test Qdrant
 err := vendors.QdrantEnsureCollection()
 ```
@@ -382,4 +319,5 @@ err := vendors.QdrantEnsureCollection()
 | Add new vendor | Create `backend/vendors/myservice.go` |
 | Modify OpenAI calls | `backend/vendors/openai.go` |
 | Add prompts | `backend/vendors/openai_prompts.go` |
-| Change search behavior | `backend/vendors/meilisearch.go` or `qdrant.go` |
+| Change keyword search behavior | `backend/db/files_fts.go` (FTS5 schema + queries) |
+| Change semantic search behavior | `backend/vendors/qdrant.go` |
