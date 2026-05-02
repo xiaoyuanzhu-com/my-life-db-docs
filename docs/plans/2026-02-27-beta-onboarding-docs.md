@@ -174,13 +174,6 @@ Pass environment variables in your `docker-compose.yml` to configure MyLifeDB:
 | `OPENAI_API_KEY` | OpenAI API key for summarization and tagging |
 | `OPENAI_MODEL` | Model to use (default: `gpt-4o-mini`) |
 
-### Search (optional)
-
-| Variable | Description |
-|----------|-------------|
-| `MEILI_HOST` | Meilisearch URL (e.g., `http://localhost:7700`) |
-| `MEILI_API_KEY` | Meilisearch API key |
-
 ## Install the App
 
 Join the iOS and macOS beta via TestFlight:
