@@ -2,7 +2,7 @@
 title: "Architecture Overview"
 ---
 
-> Last edit: 2026-04-30
+> Last edit: 2026-05-02
 
 This document is the entry point for agents working on the MyLifeDB codebase. It describes the overall system design and points to component-specific documentation.
 
@@ -81,7 +81,6 @@ When working on a specific area, read the corresponding component doc:
 | Authentication | [components/authentication.md](/docs/internal/components/authentication/) | OAuth, password auth modes |
 | HTTP API | [components/http-api.md](/docs/internal/components/http-api/) | Endpoints, handlers, routes |
 | Database | [components/database-layer.md](/docs/internal/components/database-layer/) | SQLite, migrations, queries |
-| External services | [components/external-service-integrations.md](/docs/internal/components/external-service-integrations/) | OpenAI, Qdrant, etc. |
 
 ## Event Flow Between Components
 

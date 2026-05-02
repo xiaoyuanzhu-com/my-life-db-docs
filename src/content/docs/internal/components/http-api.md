@@ -2,7 +2,7 @@
 title: "HTTP API"
 ---
 
-> Last edit: 2026-02-26
+> Last edit: 2026-05-02
 
 The API layer provides 50+ HTTP endpoints for the frontend and external integrations.
 
@@ -142,7 +142,6 @@ Registered on main router (not API group) to bypass middleware:
 | Route | Method | Handler | Description |
 |-------|--------|---------|-------------|
 | `/api/search` | GET | `Search` | Full-text search |
-| `/api/ai/summarize` | POST | `Summarize` | AI summarization |
 | `/api/settings` | GET | `GetSettings` | Get settings |
 | `/api/settings` | PUT | `UpdateSettings` | Update settings |
 | `/api/settings` | POST | `ResetSettings` | Reset to defaults |
@@ -150,7 +149,6 @@ Registered on main router (not API group) to bypass middleware:
 | `/api/upload/tus/*path` | Any | `TUSHandler` | TUS upload protocol |
 | `/api/upload/finalize` | POST | `FinalizeUpload` | Finalize upload |
 | `/api/directories` | GET | `GetDirectories` | List directories |
-| `/api/vendors/openai/models` | GET | `GetOpenAIModels` | List OpenAI models |
 | `/api/notifications/stream` | GET | `NotificationStream` | SSE stream |
 | `/api/asr` | POST | `ASRHandler` | Non-realtime ASR |
 | `/raw/*path` | GET | `ServeRawFile` | Serve raw file |

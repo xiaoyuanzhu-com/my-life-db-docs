@@ -2,7 +2,7 @@
 title: "API Documentation"
 ---
 
-> Last edit: 2026-04-30
+> Last edit: 2026-05-02
 
 This document describes the REST API endpoints for the MyLifeDB backend. Mobile app developers should use this as a reference for implementing iOS and Android clients.
 
@@ -1233,45 +1233,6 @@ GET /api/stats
 
 ---
 
-## AI
-
-### Summarize Text
-
-Generates an AI summary of the provided text.
-
-```http
-POST /api/ai/summarize
-```
-
-**Request Body:**
-```json
-{
-  "text": "Long transcript or document text...",
-  "maxTokens": 300
-}
-```
-
-**Response (200 OK):**
-```json
-{
-  "data": {
-    "summary": "• Key point 1\n• Key point 2\n• Action items..."
-  }
-}
-```
-
-**Response (503 Service Unavailable):**
-```json
-{
-  "error": {
-    "code": "SERVICE_UNAVAILABLE",
-    "message": "OpenAI API key not configured"
-  }
-}
-```
-
----
-
 ## File Upload
 
 MyLifeDB supports two upload strategies. Clients choose based on file size:
@@ -1476,26 +1437,6 @@ data: {"type":"library-changed","path":"notes/file.md","action":"create","timest
 | `library-changed` | Library content changed | `path`, `action` |
 | `pin-changed` | Pin state changed | `path` |
 | `digest-update` | Digest processing update | `path`, `digester`, `status` |
-
----
-
-## Vendors
-
-### List OpenAI Models
-
-```http
-GET /api/vendors/openai/models
-```
-
-**Response (200 OK):**
-```json
-{
-  "data": [
-    {"id": "gpt-4o", "name": "GPT-4o"},
-    {"id": "gpt-4o-mini", "name": "GPT-4o Mini"}
-  ]
-}
-```
 
 ---
 

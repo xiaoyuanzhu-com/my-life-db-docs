@@ -2,7 +2,7 @@
 title: "Voice Input System"
 ---
 
-> Last edit: 2026-02-26
+> Last edit: 2026-05-02
 
 ## Overview
 
@@ -548,28 +548,12 @@ function cleanupText(text: string): string {
 ```
 
 **Summary Generation** (LLM-based):
-```typescript
-async function generateSummary(text: string): Promise<string> {
-  const prompt = `Summarize the following transcript into key bullet points.
-Focus on main topics, decisions, and action items:
 
-${text}
-
-Summary:`;
-
-  const response = await fetch('/api/ai/summarize', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      prompt,
-      max_tokens: 300,
-      temperature: 0.3
-    })
-  });
-
-  return response.json();
-}
-```
+> **Note (2026-05-02):** The previous `/api/ai/summarize` endpoint has been
+> removed. When implementing this phase, summary generation should route
+> through the agent LLM gateway (`AGENT_BASE_URL` / `AGENT_API_KEY`) rather
+> than its own dedicated endpoint, or be added as a new endpoint backed by
+> the same gateway config.
 
 ### Data Storage (Phase 3)
 
