@@ -1,0 +1,32 @@
+---
+// Standalone API reference page powered by Scalar.
+// Served at /docs/api/reference/ (Astro `base` is `/docs`, `trailingSlash: 'always'`).
+// The OpenAPI spec lives at /docs/openapi.yaml (copied from repo root into public/).
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const specUrl = `${base}/openapi.yaml`;
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MyLifeDB REST API — Reference</title>
+    <link rel="icon" href={`${base}/favicon.svg`} type="image/svg+xml" />
+    <style>
+      html, body { margin: 0; padding: 0; height: 100%; }
+      body { font-family: system-ui, sans-serif; }
+    </style>
+  </head>
+  <body>
+    <div id="scalar-root"></div>
+    <script type="module" define:vars={{ specUrl }}>
+      import { createApiReference } from '@scalar/api-reference';
+      createApiReference('#scalar-root', {
+        url: specUrl,
+        theme: 'default',
+        layout: 'modern',
+        hideDownloadButton: false,
+      });
+    </script>
+  </body>
+</html>

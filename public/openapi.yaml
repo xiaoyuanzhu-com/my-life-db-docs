@@ -1,0 +1,1954 @@
+openapi: 3.1.0
+info:
+  title: MyLifeDB REST API
+  version: current
+  description: |
+    Baseline snapshot of the MyLifeDB HTTP API as it currently exists in
+    `backend/api/routes.go`. This document is hand-written from the live
+    handlers, not generated. The API is in the middle of a refactor toward
+    a namespaced structure (see ADR `internal/api/api-structure.md`); this
+    spec captures the **pre-refactor** surface and exists so the new
+    structure can be diffed against it.
+
+    Notes:
+    - The API is a single-user / single-instance backend. Auth modes are
+      pluggable: `none`, `password`, or `oauth` (OIDC). A few endpoints are
+      always public (the `/api/auth/*`, `/api/oauth/*`, `/api/share/*`
+      preview, `/api/connect/authorize/preview`, and the MCP endpoint).
+    - Most response bodies are still ad-hoc `gin.H{}` shapes — the
+      `RespondData` / `RespondList` envelope (`{ data: ... }`,
+      `{ data: [...], pagination: {...} }`) is being adopted incrementally.
+      Where an endpoint already uses it the schema reflects the envelope.
+    - For brevity, payload schemas for the agent / ACP family are minimal;
+      the full ACP frame contract is documented separately in the agent
+      WebSocket protocol doc.
+servers:
+  - url: http://localhost:12345
+    description: Local instance
+
+tags:
+  - name: auth
+    description: Password login + session cookie.
+  - name: oauth
+    description: Owner OIDC login flow (used when MLD_AUTH_MODE=oauth).
+  - name: library
+    description: User filesystem operations (tree, rename, move, pin, etc.).
+  - name: upload
+    description: TUS resumable + simple PUT uploads.
+  - name: search
+    description: FTS5 full-text search across the library.
+  - name: notifications
+    description: Server-sent events for live UI updates.
+  - name: settings
+    description: User-level preferences stored in the app DB.
+  - name: stats
+    description: Library statistics.
+  - name: directories
+    description: Top-level directory listing under USER_DATA_DIR.
+  - name: apps
+    description: Apps catalog (importable third-party apps).
+  - name: collectors
+    description: Data-collector configurations.
+  - name: connect
+    description: |
+      MyLifeDB Connect — OAuth 2.1 (PKCE) authorization for third-party
+      apps to call /raw with scoped tokens. Includes the well-known
+      discovery doc.
+  - name: agent
+    description: Agent (ACP) sessions, groups, attachments, defs, skills, MCP.
+  - name: explore
+    description: Public/explore feed posts.
+  - name: share
+    description: Anonymous shared agent sessions (no auth).
+  - name: mcp
+    description: Internal MCP JSON-RPC endpoint hosting MyLifeDB tools.
+  - name: raw
+    description: Raw file serving from USER_DATA_DIR with HTTP caching.
+  - name: sqlar
+    description: Files stored inside SQLAR archives in the index DB.
+  - name: wellknown
+    description: OAuth discovery document.
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: session
+      description: |
+        Owner session cookie set by `POST /api/auth/login` (password mode)
+        or by the OAuth callback (oauth mode). When `MLD_AUTH_MODE=none`
+        the middleware passes everything through.
+    connectBearer:
+      type: http
+      scheme: bearer
+      description: |
+        Connect-issued access token (`grant_type=authorization_code` or
+        `refresh_token` from `/connect/token`). Carries scopes
+        (`files.read`, `files.write`). Used on `/raw/*`.
+    oauthBearer:
+      type: http
+      scheme: bearer
+      description: |
+        Owner OIDC access token from the IdP. Accepted as an alternative
+        to the session cookie on `/raw/*`.
+    mcpInternal:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: |
+        Internal MCP server token (Bearer prefix). Used by auto-run
+        agents calling `/api/mcp`. Optional when calling from localhost.
+
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: Machine-readable error code (e.g. NOT_FOUND, LIBRARY_PATH_REQUIRED).
+            message:
+              type: string
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  field:   { type: string }
+                  message: { type: string }
+                  code:    { type: string }
+
+    LegacyErrorResponse:
+      description: 'Older endpoints still return `{ error: "..." }` directly.'
+      type: object
+      properties:
+        error: { type: string }
+
+    Pagination:
+      type: object
+      properties:
+        nextCursor: { type: string, nullable: true }
+        prevCursor: { type: string, nullable: true }
+        hasMore:    { type: boolean }
+        total:      { type: integer, nullable: true }
+        limit:      { type: integer, nullable: true }
+        offset:     { type: integer, nullable: true }
+
+    SuccessOK:
+      type: object
+      properties:
+        success: { type: boolean }
+
+    OkFlag:
+      type: object
+      properties:
+        ok: { type: boolean }
+
+    FileNode:
+      type: object
+      properties:
+        path:         { type: string }
+        type:         { type: string, enum: [file, folder] }
+        size:         { type: integer, nullable: true }
+        modifiedAt:   { type: integer, description: Unix ms }
+        createdAt:    { type: integer, description: Unix ms (added-to-library proxy) }
+        previewSqlar: { type: string, nullable: true }
+        children:
+          type: array
+          items: { $ref: '#/components/schemas/FileNode' }
+
+    FileInfo:
+      type: object
+      properties:
+        path:          { type: string }
+        name:          { type: string }
+        isFolder:      { type: boolean }
+        size:          { type: integer, nullable: true }
+        mimeType:      { type: string, nullable: true }
+        hash:          { type: string, nullable: true }
+        modifiedAt:    { type: integer }
+        createdAt:     { type: integer }
+        lastScannedAt: { type: integer, nullable: true }
+        textPreview:   { type: string, nullable: true }
+        previewSqlar:  { type: string, nullable: true }
+        previewStatus: { type: string, nullable: true }
+        isPinned:      { type: boolean }
+
+    SearchResultItem:
+      type: object
+      properties:
+        path:          { type: string }
+        name:          { type: string }
+        isFolder:      { type: boolean }
+        size:          { type: integer, nullable: true }
+        mimeType:      { type: string, nullable: true }
+        modifiedAt:    { type: integer }
+        createdAt:     { type: integer }
+        score:         { type: number }
+        snippet:       { type: string }
+        textPreview:   { type: string, nullable: true }
+        previewSqlar:  { type: string, nullable: true }
+        previewStatus: { type: string, nullable: true }
+        highlights:
+          type: object
+          additionalProperties: { type: string }
+        matchContext:
+          type: object
+          nullable: true
+          properties:
+            source:  { type: string }
+            snippet: { type: string }
+            terms:   { type: array, items: { type: string } }
+            label:   { type: string }
+
+    SearchResponse:
+      type: object
+      properties:
+        results:
+          type: array
+          items: { $ref: '#/components/schemas/SearchResultItem' }
+        pagination:
+          type: object
+          properties:
+            total:   { type: integer }
+            limit:   { type: integer }
+            offset:  { type: integer }
+            hasMore: { type: boolean }
+        query:   { type: string }
+        timing:
+          type: object
+          properties:
+            totalMs:  { type: integer }
+            searchMs: { type: integer }
+            enrichMs: { type: integer }
+        sources:
+          type: array
+          items: { type: string }
+
+    ExplorePost:
+      type: object
+      description: Stored explore post (full schema in `db.ExplorePost`).
+      properties:
+        id:        { type: string }
+        author:    { type: string }
+        title:     { type: string }
+        content:   { type: string }
+        mediaType: { type: string }
+        media:     { type: array, items: { type: object } }
+        tags:      { type: array, items: { type: string } }
+        createdAt: { type: integer }
+        updatedAt: { type: integer }
+
+    ExplorePostsResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ExplorePost' }
+        cursors:
+          type: object
+          properties:
+            first: { type: string, nullable: true }
+            last:  { type: string, nullable: true }
+        hasMore:
+          type: object
+          properties:
+            older: { type: boolean }
+            newer: { type: boolean }
+
+    OAuthTokenResponse:
+      type: object
+      description: RFC 6749 token endpoint response.
+      properties:
+        access_token:       { type: string }
+        token_type:         { type: string, example: Bearer }
+        expires_in:         { type: integer }
+        refresh_token:      { type: string }
+        refresh_expires_in: { type: integer }
+        scope:              { type: string }
+        id_token:           { type: string }
+
+    OAuthError:
+      type: object
+      description: RFC 6749 §5.2 error response.
+      properties:
+        error:             { type: string }
+        error_description: { type: string }
+
+    AgentSessionSummary:
+      type: object
+      description: Minimal agent session record returned by list/get.
+      properties:
+        id:           { type: string }
+        title:        { type: string }
+        workingDir:   { type: string }
+        agentType:    { type: string, example: claude_code }
+        sessionState: { type: string, enum: [idle, working, unread, archived] }
+        createdAt:    { type: integer }
+        lastActivity: { type: integer }
+        source:       { type: string, example: user }
+        storageId:    { type: string }
+        groupId:      { type: string, nullable: true }
+        pinnedAt:     { type: integer, nullable: true }
+        agentName:    { type: string }
+        triggerKind:  { type: string }
+        triggerData:  { type: object }
+
+    AgentSessionGroup:
+      type: object
+      properties:
+        id:        { type: string }
+        name:      { type: string }
+        sortOrder: { type: integer }
+        createdAt: { type: integer }
+        updatedAt: { type: integer }
+
+    Collector:
+      type: object
+      properties:
+        id:      { type: string }
+        enabled: { type: boolean }
+        config:  { type: object }
+
+    UserSettings:
+      type: object
+      description: User preferences (full schema in models.UserSettings).
+      properties:
+        preferences:
+          type: object
+          properties:
+            theme:       { type: string }
+            defaultView: { type: string }
+            logLevel:    { type: string }
+            language:    { type: string, nullable: true }
+        extraction:
+          type: object
+        storage:
+          type: object
+
+  parameters:
+    PathWildcard:
+      name: path
+      in: path
+      required: true
+      description: |
+        Filesystem path under USER_DATA_DIR. Accepts slashes; the route
+        is registered as a Gin wildcard (`*path`).
+      style: simple
+      explode: false
+      schema: { type: string }
+
+paths:
+
+  # =============================================================
+  # auth — file: backend/api/auth.go
+  # =============================================================
+  /api/auth/login:
+    post:
+      tags: [auth]
+      summary: Password login (sets session cookie)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string }
+      responses:
+        '200':
+          description: Login successful; `session` cookie is set.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:   { type: boolean }
+                  sessionId: { type: string }
+        '401': { description: Invalid password, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '500': { description: Server error, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+
+  /api/auth/logout:
+    post:
+      tags: [auth]
+      summary: Clear the password session cookie
+      security: []
+      responses:
+        '200':
+          description: Always succeeds.
+          content: { application/json: { schema: { $ref: '#/components/schemas/SuccessOK' } } }
+
+  # =============================================================
+  # oauth — file: backend/api/oauth.go
+  # =============================================================
+  /api/oauth/authorize:
+    get:
+      tags: [oauth]
+      summary: Begin OAuth/OIDC login (302 redirect to IdP)
+      security: []
+      parameters:
+        - name: native_redirect
+          in: query
+          required: false
+          schema: { type: string }
+          description: Optional native-app redirect target encoded in the state.
+      responses:
+        '302': { description: Redirect to upstream authorization endpoint }
+        '500': { description: OAuth not configured or state generation failed }
+
+  /api/oauth/callback:
+    get:
+      tags: [oauth]
+      summary: OIDC callback (302 to /, sets access_token + refresh_token cookies)
+      security: []
+      parameters:
+        - { name: code,  in: query, required: false, schema: { type: string } }
+        - { name: state, in: query, required: false, schema: { type: string } }
+        - { name: error, in: query, required: false, schema: { type: string } }
+      responses:
+        '302': { description: Redirect to / (or to native_redirect with tokens) }
+
+  /api/oauth/refresh:
+    post:
+      tags: [oauth]
+      summary: Refresh OIDC tokens using refresh_token cookie or body
+      security: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refresh_token: { type: string }
+      responses:
+        '200':
+          description: New tokens issued; cookies refreshed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:       { type: boolean }
+                  expiresIn:     { type: integer }
+                  access_token:  { type: string }
+                  refresh_token: { type: string }
+        '401': { description: No or invalid refresh token }
+
+  /api/oauth/token:
+    get:
+      tags: [oauth]
+      summary: Verify access token (cookie or Authorization Bearer)
+      security: []
+      responses:
+        '200':
+          description: Verification result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  authenticated: { type: boolean }
+                  username: { type: string }
+                  sub:      { type: string }
+                  email:    { type: string }
+                  error:    { type: string }
+
+  /api/oauth/logout:
+    post:
+      tags: [oauth]
+      summary: Clear OIDC cookies
+      security: []
+      responses:
+        '200': { content: { application/json: { schema: { $ref: '#/components/schemas/SuccessOK' } } } }
+
+  # =============================================================
+  # library — file: backend/api/files.go, backend/api/archive.go
+  # =============================================================
+  /api/library/file:
+    delete:
+      tags: [library]
+      summary: Delete a file or folder by path
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: path, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { content: { application/json: { schema: { $ref: '#/components/schemas/SuccessOK' } } } }
+        '400': { content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '404': { content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '500': { content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+
+  /api/library/file-info:
+    get:
+      tags: [library]
+      summary: Get indexed metadata for a file
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: path, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          content: { application/json: { schema: { $ref: '#/components/schemas/FileInfo' } } }
+        '404': { description: File not found }
+
+  /api/library/pin:
+    post:
+      tags: [library]
+      summary: Toggle pin on a file (returns new state)
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path: { type: string }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  isPinned: { type: boolean }
+    delete:
+      tags: [library]
+      summary: Unpin a file
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: path, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { content: { application/json: { schema: { $ref: '#/components/schemas/SuccessOK' } } } }
+
+  /api/library/tree:
+    get:
+      tags: [library]
+      summary: List a directory subtree
+      description: |
+        Returns either a recursive `children` tree (default) or a flat
+        `files` array when `query` is provided (server-side substring
+        search). Field selection via the `fields` param keeps the
+        response small for the file browser.
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: path,       in: query, schema: { type: string }, description: "Relative or absolute path; default = root" }
+        - { name: depth,      in: query, schema: { type: integer, default: 1 }, description: "0 = unlimited" }
+        - { name: limit,      in: query, schema: { type: integer }, description: "Max nodes; default unlimited" }
+        - { name: fields,     in: query, schema: { type: string }, description: "CSV: path,type,size,modifiedAt,createdAt,previewSqlar" }
+        - { name: folderOnly, in: query, schema: { type: boolean, default: false } }
+        - { name: query,      in: query, schema: { type: string }, description: "Server-side substring filter; switches response to flat list" }
+      responses:
+        '200':
+          description: Tree response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  basePath: { type: string }
+                  path:     { type: string }
+                  children:
+                    type: array
+                    items: { $ref: '#/components/schemas/FileNode' }
+                  files:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        path: { type: string }
+                        type: { type: string }
+                  totalCount: { type: integer }
+                  truncated:  { type: boolean }
+
+  /api/library/rename:
+    post:
+      tags: [library]
+      summary: Rename a file or folder
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path, newName]
+              properties:
+                path:    { type: string }
+                newName: { type: string }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  newPath: { type: string }
+        '409': { description: A file with this name already exists }
+
+  /api/library/move:
+    post:
+      tags: [library]
+      summary: Move a file or folder to a target directory
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path:       { type: string }
+                targetPath: { type: string }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  newPath: { type: string }
+
+  /api/library/folder:
+    post:
+      tags: [library]
+      summary: Create a folder
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                path: { type: string, description: "Parent directory; empty = root" }
+                name: { type: string }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  path: { type: string }
+
+  /api/library/download:
+    get:
+      tags: [library]
+      summary: Download a file (attachment) or folder (zip stream)
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: path, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: File or zip content; sets Content-Disposition.
+          content:
+            application/octet-stream: { schema: { type: string, format: binary } }
+            application/zip:          { schema: { type: string, format: binary } }
+
+  /api/library/root:
+    get:
+      tags: [library]
+      summary: Get the configured USER_DATA_DIR root path
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  root: { type: string }
+
+  /api/library/extract:
+    post:
+      tags: [library]
+      summary: Extract an archive in-place into its parent directory
+      description: |
+        Supports zip, tar (+ gz/bz2/xz/zst), 7z, rar. Skips macOS resource
+        forks and Thumbs.db. Validates against zip-slip.
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path: { type: string }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  paths:   { type: array, items: { type: string } }
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        path:   { type: string }
+                        status: { type: string, example: created }
+
+  # =============================================================
+  # notifications — file: backend/api/notifications.go
+  # =============================================================
+  /api/notifications/stream:
+    get:
+      tags: [notifications]
+      summary: SSE event stream
+      description: |
+        Server-Sent Events stream. Heartbeat comments every 30s.
+        Event types: `connected`, `inbox-changed`, `library-changed`,
+        `pin-changed`. Each event is one line `data: <json>\n\n`.
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200':
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: Stream of JSON-encoded notification events.
+
+  # =============================================================
+  # search — file: backend/api/search.go
+  # =============================================================
+  /api/search:
+    get:
+      tags: [search]
+      summary: Full-text search via SQLite FTS5
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: q,      in: query, required: true, schema: { type: string }, description: "Min 2 chars" }
+        - { name: limit,  in: query, schema: { type: integer, default: 20, maximum: 100 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+        - { name: type,   in: query, schema: { type: string }, description: "Optional type filter" }
+        - { name: path,   in: query, schema: { type: string }, description: "Optional path prefix filter" }
+        - { name: types,  in: query, schema: { type: string, default: keyword }, description: "Currently only `keyword` is supported" }
+      responses:
+        '200':
+          content: { application/json: { schema: { $ref: '#/components/schemas/SearchResponse' } } }
+        '400': { content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+
+  # =============================================================
+  # settings — file: backend/api/settings.go
+  # =============================================================
+  /api/settings:
+    get:
+      tags: [settings]
+      summary: Get current user settings
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200': { content: { application/json: { schema: { $ref: '#/components/schemas/UserSettings' } } } }
+    put:
+      tags: [settings]
+      summary: Merge-update user settings
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserSettings' }
+      responses:
+        '200': { content: { application/json: { schema: { $ref: '#/components/schemas/UserSettings' } } } }
+    post:
+      tags: [settings]
+      summary: Reset settings to defaults (body { action - reset })
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: { type: string, enum: [reset] }
+      responses:
+        '200': { content: { application/json: { schema: { $ref: '#/components/schemas/UserSettings' } } } }
+
+  # =============================================================
+  # collectors — file: backend/api/collectors.go
+  # =============================================================
+  /api/collectors:
+    get:
+      tags: [collectors]
+      summary: List all configured collectors
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Collector' }
+
+  /api/collectors/{id}:
+    put:
+      tags: [collectors]
+      summary: Upsert a collector configuration
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: { type: boolean }
+                config:  { type: object }
+      responses:
+        '200': { content: { application/json: { schema: { $ref: '#/components/schemas/Collector' } } } }
+
+  # =============================================================
+  # stats — file: backend/api/stats.go
+  # =============================================================
+  /api/stats:
+    get:
+      tags: [stats]
+      summary: Library file count + total size
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  library:
+                    type: object
+                    properties:
+                      fileCount: { type: integer }
+                      totalSize: { type: integer }
+
+  # =============================================================
+  # upload — file: backend/api/upload.go
+  # =============================================================
+  /api/upload/simple/{path}:
+    put:
+      tags: [upload]
+      summary: Single-request upload of a small file
+      description: |
+        Use for small files (~≤1 MiB). The URL path is the destination
+        relative to USER_DATA_DIR; body is the raw file content.
+        Performs content-aware deduplication (skip if identical hash).
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - $ref: '#/components/parameters/PathWildcard'
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  path:    { type: string }
+                  paths:   { type: array, items: { type: string } }
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        path:   { type: string }
+                        status: { type: string, enum: [write, skip] }
+
+  /api/upload/finalize:
+    post:
+      tags: [upload]
+      summary: Finalize a batch of TUS uploads
+      description: |
+        Moves each completed TUS upload from the staging dir into the
+        destination (default `inbox`). Performs SHA-256 dedup against the
+        existing index.
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [uploads]
+              properties:
+                uploads:
+                  type: array
+                  items:
+                    type: object
+                    required: [uploadId, filename]
+                    properties:
+                      uploadId: { type: string }
+                      filename: { type: string }
+                      size:     { type: integer }
+                      type:     { type: string }
+                text:        { type: string }
+                destination: { type: string, nullable: true, description: "null = inbox; '' = data root; otherwise specific subdir" }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  path:    { type: string }
+                  paths:   { type: array, items: { type: string } }
+                  results: { type: array, items: { type: object } }
+
+  /api/upload/tus/{path}:
+    parameters:
+      - $ref: '#/components/parameters/PathWildcard'
+    post:
+      tags: [upload]
+      summary: TUS — create resumable upload
+      description: "TUS resumable upload protocol. See https://tus.io/protocols/resumable-upload for the full contract."
+      security: [{ sessionCookie: [] }]
+      responses:
+        '201': { description: Upload created; `Location` header holds upload URL }
+    head:
+      tags: [upload]
+      summary: TUS — query upload offset
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200': { description: Returns Upload-Offset and Upload-Length headers }
+    patch:
+      tags: [upload]
+      summary: TUS — append chunk at given offset
+      security: [{ sessionCookie: [] }]
+      responses:
+        '204': { description: Chunk accepted; new Upload-Offset returned }
+    delete:
+      tags: [upload]
+      summary: TUS — abort upload
+      security: [{ sessionCookie: [] }]
+      responses:
+        '204': { description: Upload deleted }
+    options:
+      tags: [upload]
+      summary: TUS — server capabilities
+      security: []
+      responses:
+        '204': { description: Returns Tus-Version, Tus-Extension, Tus-Max-Size headers }
+
+  # =============================================================
+  # directories — file: backend/api/files.go
+  # =============================================================
+  /api/directories:
+    get:
+      tags: [directories]
+      summary: List top-level directories under USER_DATA_DIR
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: string }
+
+  # =============================================================
+  # apps — file: backend/api/apps.go
+  # =============================================================
+  /api/apps:
+    get:
+      tags: [apps]
+      summary: List all known apps in the catalog
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  apps:
+                    type: array
+                    items: { type: object }
+
+  /api/apps/{id}:
+    get:
+      tags: [apps]
+      summary: Get one app entry + its doc
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { type: object }
+        '404': { description: App not found }
+
+  # =============================================================
+  # connect — files: backend/api/connect.go (+ public + protected groups)
+  # =============================================================
+  /api/connect/authorize/preview:
+    get:
+      tags: [connect]
+      summary: (public) Preview a Connect /authorize request for the consent screen
+      security: []
+      parameters:
+        - { name: response_type,         in: query, required: true, schema: { type: string, enum: [code] } }
+        - { name: client_id,             in: query, required: true, schema: { type: string } }
+        - { name: redirect_uri,          in: query, required: true, schema: { type: string } }
+        - { name: scope,                 in: query, required: true, schema: { type: string } }
+        - { name: state,                 in: query, schema: { type: string } }
+        - { name: code_challenge,        in: query, required: true, schema: { type: string } }
+        - { name: code_challenge_method, in: query, required: true, schema: { type: string, enum: [S256] } }
+        - { name: app_name,              in: query, required: true, schema: { type: string } }
+        - { name: app_icon,              in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: Preview metadata for the consent UI (RespondData envelope).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      client:
+                        type: object
+                        properties:
+                          id:       { type: string }
+                          name:     { type: string }
+                          iconUrl:  { type: string }
+                          verified: { type: boolean }
+                      requestedScopes:  { type: array, items: { type: string } }
+                      grantedScopes:    { type: array, items: { type: string } }
+                      newScopes:        { type: array, items: { type: string } }
+                      canSilentApprove: { type: boolean }
+                      redirectUri:      { type: string }
+
+  /api/connect/consent:
+    post:
+      tags: [connect]
+      summary: (owner) Approve or deny a Connect authorize request
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [response_type, client_id, redirect_uri, scope, code_challenge, code_challenge_method, app_name, approve]
+              properties:
+                response_type:         { type: string, enum: [code] }
+                client_id:             { type: string }
+                redirect_uri:          { type: string }
+                scope:                 { type: string }
+                state:                 { type: string }
+                code_challenge:        { type: string }
+                code_challenge_method: { type: string, enum: [S256] }
+                app_name:              { type: string }
+                app_icon:              { type: string }
+                approve:               { type: boolean }
+      responses:
+        '200':
+          description: redirect_to URL the SPA should navigate to.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      redirectTo: { type: string }
+
+  /api/connect/clients:
+    get:
+      tags: [connect]
+      summary: (owner) List connected apps
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200':
+          description: List envelope of clients.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:          { type: string }
+                        name:        { type: string }
+                        iconUrl:     { type: string }
+                        verified:    { type: boolean }
+                        firstSeenAt: { type: integer }
+                        lastSeenAt:  { type: integer }
+                        scopes:      { type: array, items: { type: string } }
+                        grantedAt:   { type: integer, nullable: true }
+                        lastUsedAt:  { type: integer, nullable: true }
+
+  /api/connect/clients/{id}:
+    delete:
+      tags: [connect]
+      summary: (owner) Revoke a connected app + all tokens
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '204': { description: Client deleted }
+
+  /api/connect/clients/{id}/audit:
+    get:
+      tags: [connect]
+      summary: (owner) Recent activity audit log for a client
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: id,    in: path, required: true, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 100 } }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:       { type: string }
+                        ts:       { type: integer }
+                        method:   { type: string }
+                        path:     { type: string }
+                        status:   { type: integer }
+                        scope:    { type: string }
+                        clientId: { type: string }
+
+  /connect/token:
+    post:
+      tags: [connect]
+      summary: (public) OAuth 2.1 token endpoint (PKCE; no client secret)
+      description: |
+        `grant_type=authorization_code` (code + code_verifier) or
+        `grant_type=refresh_token` (refresh rotation).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [grant_type, client_id]
+              properties:
+                grant_type:    { type: string, enum: [authorization_code, refresh_token] }
+                client_id:     { type: string }
+                code:          { type: string }
+                redirect_uri:  { type: string }
+                code_verifier: { type: string }
+                refresh_token: { type: string }
+      responses:
+        '200':
+          content: { application/json: { schema: { $ref: '#/components/schemas/OAuthTokenResponse' } } }
+        '400':
+          content: { application/json: { schema: { $ref: '#/components/schemas/OAuthError' } } }
+
+  /connect/revoke:
+    post:
+      tags: [connect]
+      summary: (public) RFC 7009 token revocation
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token:           { type: string }
+                token_type_hint: { type: string }
+      responses:
+        '200': { description: Always 200 per RFC 7009 §2.2 }
+
+  /.well-known/oauth-authorization-server:
+    get:
+      tags: [wellknown]
+      summary: (public) OAuth 2.1 authorization-server discovery doc
+      security: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                description: RFC 8414 metadata.
+                properties:
+                  issuer:                                { type: string }
+                  authorization_endpoint:                { type: string }
+                  token_endpoint:                        { type: string }
+                  revocation_endpoint:                   { type: string }
+                  response_types_supported:              { type: array, items: { type: string } }
+                  grant_types_supported:                 { type: array, items: { type: string } }
+                  code_challenge_methods_supported:      { type: array, items: { type: string } }
+                  token_endpoint_auth_methods_supported: { type: array, items: { type: string } }
+                  scopes_supported:                      { type: array, items: { type: string } }
+
+  # =============================================================
+  # share — file: backend/api/share.go (public)
+  # =============================================================
+  /api/share/{token}:
+    get:
+      tags: [share]
+      summary: (public) Get shared agent session metadata
+      security: []
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:           { type: string }
+                  title:        { type: string }
+                  workingDir:   { type: string }
+                  agentType:    { type: string }
+                  sessionState: { type: string }
+                  createdAt:    { type: integer }
+                  lastActivity: { type: integer }
+        '404': { description: Shared session not found }
+
+  /api/share/{token}/messages:
+    get:
+      tags: [share]
+      summary: (public) Get messages for a shared session
+      security: []
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: JSON array of raw ACP frames (delegates to GetAgentMessages).
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object }
+
+  /api/share/{token}/subscribe:
+    get:
+      tags: [share]
+      summary: (public) WebSocket subscribe (read-only) to shared session frames
+      description: |
+        HTTP/1.1 Upgrade to WebSocket. After upgrade, the server replays
+        all stored ACP frames from cursor 0, then streams live frames as
+        they arrive. The client is read-only — incoming messages are
+        ignored. Server pings every 30s.
+      security: []
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        '101': { description: Switching protocols to WebSocket }
+        '404': { description: Shared session not found }
+
+  # =============================================================
+  # agent — files: backend/api/agent_*.go
+  # =============================================================
+  /api/agent/config:
+    get:
+      tags: [agent]
+      summary: Default configOptions per agent type (model + mode + ...)
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  defaultConfigOptions:
+                    type: object
+                    additionalProperties:
+                      type: array
+                      items: { type: object }
+
+  /api/agent/info:
+    get:
+      tags: [agent]
+      summary: List available agent runtimes (claude_code, codex, ...)
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agents:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        type:    { type: string }
+                        name:    { type: string }
+                        version: { type: string }
+
+  /api/agent/sessions:
+    get:
+      tags: [agent]
+      summary: List agent sessions (cursor-paginated)
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [active, archived, all], default: active } }
+        - { name: limit,  in: query, schema: { type: integer, default: 50 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessions:
+                    type: array
+                    items: { $ref: '#/components/schemas/AgentSessionSummary' }
+                  pagination:
+                    type: object
+                    properties:
+                      hasMore:    { type: boolean }
+                      nextCursor: { type: string, nullable: true }
+                      totalCount: { type: integer }
+    post:
+      tags: [agent]
+      summary: Create a new agent session (eagerly spawns the ACP process)
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:          { type: string }
+                message:        { type: string, description: "Initial prompt; empty = no prompt" }
+                workingDir:     { type: string }
+                agentType:      { type: string, default: claude_code }
+                permissionMode: { type: string }
+                model:          { type: string }
+                storageId:      { type: string, description: "Optional; carry-over from prior attachment uploads" }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:         { type: string }
+                  agentType:  { type: string }
+                  workingDir: { type: string }
+                  title:      { type: string }
+                  storageId:  { type: string }
+
+  /api/agent/sessions/all:
+    get:
+      tags: [agent]
+      summary: Alias of GET /api/agent/sessions (kept for backwards compat)
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200':
+          content: { application/json: { schema: { type: object } } }
+
+  /api/agent/sessions/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [agent]
+      summary: Get a single agent session
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200': { content: { application/json: { schema: { $ref: '#/components/schemas/AgentSessionSummary' } } } }
+        '404': { description: Session not found }
+    patch:
+      tags: [agent]
+      summary: Update agent session metadata (title, group, pinned, clearInterrupted)
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:            { type: string }
+                groupId:          { type: string, nullable: true, description: "null = ungroup" }
+                pinned:           { type: boolean }
+                clearInterrupted: { type: boolean }
+      responses:
+        '200': { content: { application/json: { schema: { $ref: '#/components/schemas/OkFlag' } } } }
+
+  /api/agent/sessions/{id}/messages:
+    get:
+      tags: [agent]
+      summary: Get all stored ACP frames for a session (debug)
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: JSON array of raw frames.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object }
+
+  /api/agent/sessions/{id}/changed-files:
+    get:
+      tags: [agent]
+      summary: Files changed during a session (git diff or tool-call inference)
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  source: { type: string, enum: [git, tools] }
+                  files:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        path:   { type: string }
+                        status: { type: string, enum: [added, modified, deleted, renamed, untracked] }
+
+  /api/agent/sessions/{id}/deactivate:
+    post:
+      tags: [agent]
+      summary: No-op (kept for backwards compat with older clients)
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { content: { application/json: { schema: { $ref: '#/components/schemas/OkFlag' } } } }
+
+  /api/agent/sessions/{id}/restart:
+    post:
+      tags: [agent]
+      summary: Kill the live ACP process and reset runtime state
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { content: { application/json: { schema: { $ref: '#/components/schemas/OkFlag' } } } }
+        '404': { description: Session not found }
+
+  /api/agent/sessions/{id}/archive:
+    post:
+      tags: [agent]
+      summary: Archive a session
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { content: { application/json: { schema: { $ref: '#/components/schemas/OkFlag' } } } }
+
+  /api/agent/sessions/{id}/unarchive:
+    post:
+      tags: [agent]
+      summary: Unarchive a session
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { content: { application/json: { schema: { $ref: '#/components/schemas/OkFlag' } } } }
+
+  /api/agent/sessions/{id}/share:
+    post:
+      tags: [agent]
+      summary: Mint a public share token for a session
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  shareToken: { type: string }
+                  shareUrl:   { type: string }
+    delete:
+      tags: [agent]
+      summary: Revoke share token
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { content: { application/json: { schema: { $ref: '#/components/schemas/OkFlag' } } } }
+
+  /api/agent/sessions/{id}/subscribe:
+    get:
+      tags: [agent]
+      summary: WebSocket subscribe (interactive) to an agent session
+      description: |
+        HTTP/1.1 Upgrade to WebSocket. After upgrade the client may send
+        prompts (`session/prompt`), receive ACP `session/update` frames,
+        and respond to permission requests. Server pings every 30s.
+        Full protocol is the Agent Client Protocol over WebSocket.
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '101': { description: Switching protocols to WebSocket }
+
+  /api/agent/groups:
+    get:
+      tags: [agent]
+      summary: List agent session groups
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  groups:
+                    type: array
+                    items: { $ref: '#/components/schemas/AgentSessionGroup' }
+    post:
+      tags: [agent]
+      summary: Create an agent session group
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  group: { $ref: '#/components/schemas/AgentSessionGroup' }
+
+  /api/agent/groups/order:
+    put:
+      tags: [agent]
+      summary: Reorder groups by passing the IDs in desired sort order
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ids]
+              properties:
+                ids: { type: array, items: { type: string } }
+      responses:
+        '200': { content: { application/json: { schema: { $ref: '#/components/schemas/OkFlag' } } } }
+
+  /api/agent/groups/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    patch:
+      tags: [agent]
+      summary: Rename a group
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+      responses:
+        '200': { content: { application/json: { schema: { $ref: '#/components/schemas/OkFlag' } } } }
+    delete:
+      tags: [agent]
+      summary: Delete a group (sessions in it become ungrouped)
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200': { content: { application/json: { schema: { $ref: '#/components/schemas/OkFlag' } } } }
+
+  /api/agent/attachments:
+    post:
+      tags: [agent]
+      summary: Stage a per-session attachment file (1 GiB cap)
+      description: |
+        multipart/form-data. Files stage under
+        USER_DATA_DIR/sessions/<storageId>/uploads/<filename>. The
+        storageId is minted on first upload and returned in the response.
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:      { type: string, format: binary }
+                storageId: { type: string }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  storageId:    { type: string }
+                  filename:     { type: string }
+                  absolutePath: { type: string }
+                  size:         { type: integer }
+                  contentType:  { type: string }
+        '413': { description: File exceeds 1 GiB limit }
+
+  /api/agent/attachments/{storageId}/{filename}:
+    delete:
+      tags: [agent]
+      summary: Delete a staged attachment (idempotent)
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: storageId, in: path, required: true, schema: { type: string } }
+        - { name: filename,  in: path, required: true, schema: { type: string } }
+      responses:
+        '204': { description: Deleted (or already absent) }
+
+  /api/agent/defs:
+    get:
+      tags: [agent]
+      summary: List loaded auto-agent definitions
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  defs:
+                    type: array
+                    items: { type: object }
+
+  /api/agent/defs/{name}:
+    parameters:
+      - { name: name, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [agent]
+      summary: Get an auto-agent's parsed def + raw markdown
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200': { content: { application/json: { schema: { type: object } } } }
+        '404': { description: Agent not found }
+    put:
+      tags: [agent]
+      summary: Save the markdown body for an auto-agent
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          text/markdown:
+            schema: { type: string }
+          application/json:
+            schema:
+              type: object
+              properties:
+                markdown: { type: string }
+      responses:
+        '200': { content: { application/json: { schema: { type: object } } } }
+    delete:
+      tags: [agent]
+      summary: Delete an auto-agent folder
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200': { content: { application/json: { schema: { $ref: '#/components/schemas/OkFlag' } } } }
+
+  /api/agent/defs/{name}/run:
+    post:
+      tags: [agent]
+      summary: Manually trigger an auto-agent once
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { content: { application/json: { schema: { $ref: '#/components/schemas/OkFlag' } } } }
+
+  /api/agent/skills:
+    get:
+      tags: [agent]
+      summary: List discovered Agent Skills (bundled, user, project)
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: workingDir, in: query, schema: { type: string }, description: "If set, also scans project-level skill dirs under this directory" }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  skills:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:        { type: string }
+                        description: { type: string }
+                        source:      { type: string, enum: [bundled, user, project] }
+                        agent:       { type: string, description: "Empty = vendor-neutral" }
+                        path:        { type: string }
+
+  /api/agent/mcp-servers:
+    get:
+      tags: [agent]
+      summary: List MCP servers from .mcp.json
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  servers:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:     { type: string }
+                        type:     { type: string, enum: [http, stdio, sse] }
+                        url:      { type: string }
+                        command:  { type: string }
+                        disabled: { type: boolean }
+
+  /api/agent/mcp-servers/{name}/tools:
+    get:
+      tags: [agent]
+      summary: Probe an MCP server for its tool catalog (cached)
+      description: |
+        Errors are returned 200 with `{ tools: [], error }` so the UI
+        can render the failure inline.
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tools: { type: array, items: { type: object } }
+                  error: { type: string }
+
+  /api/agent/mcp-servers/{name}:
+    patch:
+      tags: [agent]
+      summary: Toggle a server's `disabled` flag in .mcp.json
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [disabled]
+              properties:
+                disabled: { type: boolean }
+      responses:
+        '200': { content: { application/json: { schema: { $ref: '#/components/schemas/OkFlag' } } } }
+
+  # =============================================================
+  # explore — file: backend/api/explore.go
+  # =============================================================
+  /api/explore/posts:
+    get:
+      tags: [explore]
+      summary: List explore posts (cursor-paginated)
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: limit,  in: query, schema: { type: integer, default: 30, maximum: 100 } }
+        - { name: before, in: query, schema: { type: string } }
+        - { name: after,  in: query, schema: { type: string } }
+      responses:
+        '200':
+          content: { application/json: { schema: { $ref: '#/components/schemas/ExplorePostsResponse' } } }
+
+  /api/explore/posts/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [explore]
+      summary: Get a single explore post
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200': { content: { application/json: { schema: { $ref: '#/components/schemas/ExplorePost' } } } }
+        '404': { description: Post not found }
+    delete:
+      tags: [explore]
+      summary: Delete an explore post (and its media)
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200': { content: { application/json: { schema: { $ref: '#/components/schemas/OkFlag' } } } }
+
+  /api/explore/posts/{id}/comments:
+    get:
+      tags: [explore]
+      summary: List comments on a post
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  comments:
+                    type: array
+                    items: { type: object }
+
+  # =============================================================
+  # mcp — file: backend/api/routes.go (handler in backend/mcp*)
+  # =============================================================
+  /api/mcp:
+    post:
+      tags: [mcp]
+      summary: MyLifeDB MCP endpoint (JSON-RPC 2.0)
+      description: |
+        A single MCP transport endpoint hosting every MyLifeDB tool
+        (e.g. `validate_agent`, `generate_image`, `edit_image`,
+        `create_post`, `list_posts`, ...). Wire format is JSON-RPC 2.0
+        over HTTP per the MCP specification.
+
+        Auth: when an `Authorization: Bearer ...` header is supplied it
+        must match the server's internal MCP token. Requests without the
+        header are accepted (localhost trust — Claude Code CLI on the
+        same host).
+      security:
+        - mcpInternal: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: JSON-RPC 2.0 request envelope.
+      responses:
+        '200':
+          description: JSON-RPC 2.0 response.
+          content:
+            application/json:
+              schema: { type: object }
+    get:
+      tags: [mcp]
+      summary: Always returns 405 (POST only)
+      security: []
+      responses:
+        '405': { description: Method Not Allowed }
+
+  # =============================================================
+  # raw — file: backend/api/files.go (with connect+owner middleware)
+  # =============================================================
+  /raw/{path}:
+    parameters:
+      - $ref: '#/components/parameters/PathWildcard'
+    get:
+      tags: [raw]
+      summary: Serve a file from USER_DATA_DIR
+      description: |
+        Auth: owner session OR connect token with `files.read` scope.
+        Conditional requests (If-None-Match, If-Modified-Since) are
+        honored via http.ServeContent. Cache-Control is `public,
+        max-age=86400`.
+      security:
+        - sessionCookie: []
+        - oauthBearer: []
+        - connectBearer: []
+      responses:
+        '200':
+          description: File content.
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '304': { description: Not modified }
+        '400': { description: Invalid path }
+        '404': { description: File not found }
+    put:
+      tags: [raw]
+      summary: Write a file to USER_DATA_DIR
+      description: |
+        Auth: owner session OR connect token with `files.write` scope.
+        Body is the raw file content; MIME type is detected from the
+        filename. Updates the index synchronously.
+      security:
+        - sessionCookie: []
+        - oauthBearer: []
+        - connectBearer: []
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        '200': { content: { application/json: { schema: { $ref: '#/components/schemas/SuccessOK' } } } }
+        '400': { description: Invalid path }
+
+  # =============================================================
+  # sqlar — file: backend/api/files.go
+  # =============================================================
+  /sqlar/{path}:
+    get:
+      tags: [sqlar]
+      summary: Serve a file stored inside a SQLAR archive in the index DB
+      description: |
+        Files are content-addressed and immutable; Cache-Control is
+        `public, max-age=31536000, immutable`.
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - $ref: '#/components/parameters/PathWildcard'
+      responses:
+        '200':
+          description: File content (decompressed if zlib-compressed).
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '304': { description: Not modified }
+        '404': { description: File not found in archive }
