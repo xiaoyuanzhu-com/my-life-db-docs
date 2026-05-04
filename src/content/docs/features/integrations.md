@@ -42,11 +42,11 @@ A username/password pair for HTTP basic auth. Mounts as a folder in macOS Finder
 ### S3-compatible
 
 ```
-Access key id:    AKIA_MLD_…
-Secret access key: s3sk_…
+Access key id:    mlds3_…
+Secret access key: <shown once at mint>
 ```
 
-A SigV4 access key pair. Drop it into anything that talks to S3 — `aws s3 cp`, rclone, restic, MinIO clients, mobile photo backup apps that target Wasabi/B2/etc. The credential's scope folder appears as the bucket.
+A SigV4 access key pair. Drop it into anything that talks to S3 — `aws s3 cp`, rclone, restic, MinIO clients, mobile photo backup apps that target Wasabi/B2/etc. The credential's scope folder appears as the bucket. See [S3 integrations](/features/integrations-s3/) for the protocol-level reference.
 
 ## Minting a credential
 
@@ -84,7 +84,7 @@ Revocation is permanent; the row stays in the audit trail but the secret hash is
 - **No expiry by default.** Webhook/WebDAV/S3 credentials live until you revoke them. That's appropriate for unattended automations but means you should review the list periodically and prune anything you don't recognize.
 - **Last-used is your tripwire.** If a credential's last-used time jumps from "yesterday" to "10 minutes ago" and you didn't trigger anything, treat it as compromised and revoke immediately.
 - **Secrets are bcrypt'd at rest.** A read-only copy of the database (a stolen backup, a leaked snapshot) does not leak usable credentials.
-- **The prefix on each credential is intentional.** `whks_` vs `wdvs_` vs `s3sk_` makes them obvious in logs, secret scanners, and `git grep` — if one ever leaks into a repo, it's recognizable on sight.
+- **The prefix on each credential is intentional.** `whks_` vs `wdvs_` vs `mlds3_` makes them obvious in logs, secret scanners, and `git grep` — if one ever leaks into a repo, it's recognizable on sight.
 
 ## For app builders
 

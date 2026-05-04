@@ -137,7 +137,7 @@ For HTTP-only setups (LAN, Tailscale), pick **WebDAV (HTTP)** instead.
 
 ## Limits and behavior
 
-- **Body cap**: 1 GB per request. Bigger files should use [TUS uploads](/features/upload/) or the [S3 surface](/features/integrations-s3/) (multipart support, when shipped).
+- **Body cap**: 1 GB per request. Bigger files should use [TUS uploads](/features/upload/) or the [S3 surface](/features/integrations-s3/) — its multipart upload path supports objects of any size.
 - **Last-used + audit**: every successful request stamps the credential's `lastUsedAt` and writes one row to `integration_audit` (credential id, IP, method, path, status, scope family). The audit row outlives credential revocation.
 - **Auth failures are opaque**: a missing/invalid/revoked credential always returns the same `401 + WWW-Authenticate` shape — a caller can't tell "no such username" from "wrong password", which is what you want for an enumeration-resistant endpoint.
 - **Read-only credentials reject writes**: a credential minted with `files.read:/p` accepts `OPTIONS/GET/HEAD/PROPFIND` and 403s every other verb before the request reaches the filesystem. The chroot still applies — a read-only credential can only read inside its scope folder.
