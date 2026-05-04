@@ -19,10 +19,10 @@ Integration surfaces
   HTTP webhook       [ off ]
   WebDAV             [ on  ]
   S3-compatible      [ off ]
-  ⚠ Toggling a surface requires a server restart to take effect.
+  Toggling a surface takes effect immediately.
 ```
 
-In v1 the toggle is read once at startup, so a server restart is required after flipping it. Until you restart, requests to `/webdav/...` get a 404 — which is the whole point: a surface you don't use is a surface that isn't exposed.
+The toggle is checked on every request, so flipping it takes effect immediately — no server restart needed. While the toggle is off, requests to `/webdav/...` get a 404, which is the whole point: a surface you don't use is a surface that isn't exposed.
 
 ## Mint a WebDAV credential
 
@@ -141,3 +141,4 @@ For HTTP-only setups (LAN, Tailscale), pick **WebDAV (HTTP)** instead.
 - **Last-used + audit**: every successful request stamps the credential's `lastUsedAt` and writes one row to `integration_audit` (credential id, IP, method, path, status, scope family). The audit row outlives credential revocation.
 - **Auth failures are opaque**: a missing/invalid/revoked credential always returns the same `401 + WWW-Authenticate` shape — a caller can't tell "no such username" from "wrong password", which is what you want for an enumeration-resistant endpoint.
 - **Read-only credentials reject writes**: a credential minted with `files.read:/p` accepts `OPTIONS/GET/HEAD/PROPFIND` and 403s every other verb before the request reaches the filesystem. The chroot still applies — a read-only credential can only read inside its scope folder.
+- **Per-credential rate limit**: each credential is bucketed at ~60 req/min (token bucket, 1/sec refill, burst 60). Bursts above that get `429` with `Retry-After: 1` (no body — WebDAV clients render arbitrary 4xx bodies inconsistently). Buckets are in-memory; capped at 10,000 active credentials with oldest-eviction.

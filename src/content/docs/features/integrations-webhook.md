@@ -19,10 +19,10 @@ Integration surfaces
   HTTP webhook       [ on ]
   WebDAV             [ off ]
   S3-compatible      [ off ]
-  ⚠ Toggling a surface requires a server restart to take effect.
+  Toggling a surface takes effect immediately.
 ```
 
-In v1 the toggle is read once at startup, so a server restart is required after flipping it. Until you restart, requests to `/webhook/...` get a 404 — which is the whole point: a surface you don't use is a surface that isn't exposed.
+The toggle is checked on every request, so flipping it takes effect immediately — no server restart needed. While the toggle is off, requests to `/webhook/...` get a 404, which is the whole point: a surface you don't use is a surface that isn't exposed.
 
 ## Mint a webhook credential
 
@@ -132,7 +132,7 @@ The part's `filename` (from `Content-Disposition`) names the file. Parts with no
 
 3. Trigger the automation manually once. In MyLifeDB you should see the file appear in `/health/apple/raw`, and the credential's **Last used** timestamp updates.
 
-If the upload 404s, double-check that the surface is enabled in Settings *and* that you restarted the server after flipping the toggle. If it 401s, the bearer token is wrong — mint a new credential rather than trying to recover the old one.
+If the upload 404s, double-check that the surface is enabled in Settings (the toggle takes effect on the very next request — no restart needed). If it 401s, the bearer token is wrong — mint a new credential rather than trying to recover the old one. If it 429s, the credential has hit its per-credential rate limit (~60 req/min); the client should slow down and retry.
 
 ## Limits and behavior
 
@@ -141,3 +141,4 @@ If the upload 404s, double-check that the surface is enabled in Settings *and* t
 - **Filename inference**: if the sender omits `Content-Type`, MyLifeDB infers a MIME type from the file extension.
 - **Last-used + audit**: every successful request stamps the credential's `lastUsedAt` and writes one row to `integration_audit` (credential id, IP, method, path, status, scope family). The audit row outlives credential revocation.
 - **Auth failures are opaque**: a missing/invalid/revoked credential always returns the same `401 AUTH_INVALID_TOKEN` shape — a caller can't tell "no such id" from "wrong secret", which is what you want for an enumeration-resistant endpoint.
+- **Per-credential rate limit**: each credential is bucketed at ~60 req/min (token bucket, 1/sec refill, burst 60). Bursts above that get `429 TOO_MANY_REQUESTS`. Buckets are in-memory; capped at 10,000 active credentials with oldest-eviction.

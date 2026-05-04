@@ -75,14 +75,17 @@ The scope is checked **on every request**. A leaked webhook token aimed at `/hea
 
 ## Managing & revoking
 
-The Integrations tab shows every active credential with its protocol badge, scope, secret prefix, created time, and last-used time. One click on the trash icon revokes it — the credential is soft-deleted and stops working on the very next request.
+The Integrations tab shows every active credential with its protocol badge, scope, secret prefix, created time, last-used time, and the IP address that last used it. One click on the trash icon revokes it — the credential is soft-deleted and stops working on the very next request.
+
+Each credential also has a **History** button that opens a per-credential audit log: the last 100 requests with timestamp, method, path, response status, and source IP. Useful when you spot an unexpected last-used time and want to confirm what actually happened.
 
 Revocation is permanent; the row stays in the audit trail but the secret hash is gone. Rotating a credential is just *revoke + mint new*.
 
 ## Trust model — what to know
 
 - **No expiry by default.** Webhook/WebDAV/S3 credentials live until you revoke them. That's appropriate for unattended automations but means you should review the list periodically and prune anything you don't recognize.
-- **Last-used is your tripwire.** If a credential's last-used time jumps from "yesterday" to "10 minutes ago" and you didn't trigger anything, treat it as compromised and revoke immediately.
+- **Last-used is your tripwire.** If a credential's last-used time jumps from "yesterday" to "10 minutes ago" and you didn't trigger anything, treat it as compromised and revoke immediately. The IP shown next to last-used and the per-credential History view help confirm whether the activity is yours.
+- **Per-credential rate limit.** Each credential is capped at roughly 60 requests/minute (token bucket, refills at 1/sec). Bursts above that get a 429 / 503 SlowDown — a stolen credential can't be used to grind through your data at full pipe speed before you notice the spike in last-used.
 - **Secrets are bcrypt'd at rest.** A read-only copy of the database (a stolen backup, a leaked snapshot) does not leak usable credentials.
 - **The prefix on each credential is intentional.** `whks_` vs `wdvs_` vs `mlds3_` makes them obvious in logs, secret scanners, and `git grep` — if one ever leaks into a repo, it's recognizable on sight.
 
