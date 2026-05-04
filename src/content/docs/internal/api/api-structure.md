@@ -2,13 +2,13 @@
 title: "API Structure"
 ---
 
-> Last edit: 2026-05-03
+> Last edit: 2026-05-04
 
 # API Structure (ADR)
 
 ## Status
 
-Accepted — 2026-05-03
+Accepted — 2026-05-03. Phases A through E are landed; Phase F (this docs pass) lands alongside the OpenAPI/reference updates.
 
 ## Context
 
@@ -67,7 +67,7 @@ Every current route has a defined new path. Outside-`/api/` paths are listed for
 | `/api/library/rename` | POST | `PATCH /api/data/files/*path` body `{name}` |
 | `/api/library/move` | POST | `PATCH /api/data/files/*path` body `{parent}` |
 | `/api/library/folder` | POST | `POST /api/data/folders` body `{parent, name}` |
-| `/api/library/tree?path=…` | GET | `GET /api/data/folders/*path/tree` |
+| `/api/library/tree?path=…` | GET | `GET /api/data/tree?path=…` (gin's `*path` must be the final segment, so `tree` stays a top-level subroute with a query parameter) |
 | `/api/library/pin` | POST | `PUT /api/data/pins/*path` (idempotent) |
 | `/api/library/pin` | DELETE | `DELETE /api/data/pins/*path` (idempotent) |
 | `/api/library/download?path=…` | GET | `GET /api/data/download?path=…` |
@@ -196,12 +196,12 @@ These paths are explicitly NOT moved. See the rationale in [Decision](#decision)
 
 The migration is staged so each step is independently shippable and reviewable.
 
-- **Phase A — Foundation.** This ADR is the foundation. No code changes. All subsequent phases reference this document.
-- **Phase B — In-repo refactor with aliases.** Backend registers handlers at the new paths and keeps the old paths as aliases (same handler, identical behavior). Frontend is migrated to the new paths in the same PR. Aliases stay temporarily so iOS continues to work unchanged.
-- **Phase C — iOS migration.** The Apple client is updated to call the new paths. Once shipped and adopted, aliases become safe to remove.
-- **Phase D — Remove aliases.** Old paths are deleted. The route table contains only the new structure.
-- **Phase E — Connect scope widening.** The Connect scope-check middleware is extended from `/raw/*` to gate the entire `/api/data/*` subtree, since `data/` is now a contiguous prefix that maps 1:1 to `files.read` / `files.write`.
-- **Phase F — Final docs.** Generated API reference (OpenAPI tags = the six namespaces) and Connect scope reference are regenerated against the final route table.
+- **Phase A — Foundation.** ✅ Landed. This ADR is the foundation. No code changes. All subsequent phases reference this document.
+- **Phase B — In-repo refactor with aliases.** ✅ Landed. Backend registers handlers at the new paths and keeps the old paths as aliases (same handler, identical behavior). Frontend is migrated to the new paths in the same PR. Aliases stay temporarily so iOS continues to work unchanged.
+- **Phase C — iOS migration.** ✅ Landed. The Apple client is updated to call the new paths.
+- **Phase D — Remove aliases.** ✅ Landed. Old paths are deleted. The route table contains only the new structure.
+- **Phase E — Connect scope widening.** ✅ Landed. The Connect scope-check middleware is extended from `/raw/*` to gate the entire `/api/data/*` subtree, with per-route scope decisions and SSE event filtering by scope. A reference Python client lives at [`examples/connect-python/`](https://github.com/xiaoyuanzhu-com/my-life-db/tree/main/examples/connect-python).
+- **Phase F — Final docs.** ✅ Landing. Generated API reference (OpenAPI tags = the six namespaces) and Connect scope reference are regenerated against the final route table.
 
 ## Out of scope
 

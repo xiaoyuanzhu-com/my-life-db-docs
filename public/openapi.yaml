@@ -3,18 +3,30 @@ info:
   title: MyLifeDB REST API
   version: current
   description: |
-    Baseline snapshot of the MyLifeDB HTTP API as it currently exists in
-    `backend/api/routes.go`. This document is hand-written from the live
-    handlers, not generated. The API is in the middle of a refactor toward
-    a namespaced structure (see ADR `internal/api/api-structure.md`); this
-    spec captures the **pre-refactor** surface and exists so the new
-    structure can be diffed against it.
+    Snapshot of the MyLifeDB HTTP API as it currently exists in
+    `backend/api/routes.go`. The API is organized into the namespace
+    structure defined in ADR [API Structure](/docs/internal/api/api-structure/):
+
+    | Tier             | Namespaces                                  | Audience                |
+    |------------------|---------------------------------------------|-------------------------|
+    | Product domains  | `/api/data/`, `/api/agent/`, `/api/explore/`| What MyLifeDB is        |
+    | Protocol         | `/api/connect/`, `/api/mcp/`                | Non-owner callers       |
+    | Admin            | `/api/system/`                              | Owner-only control      |
+
+    Outside `/api/`: `/raw/*`, `/sqlar/*`, `/connect/{token,revoke}`,
+    and `/.well-known/*` for protocol or performance reasons.
 
     Notes:
     - The API is a single-user / single-instance backend. Auth modes are
       pluggable: `none`, `password`, or `oauth` (OIDC). A few endpoints are
-      always public (the `/api/auth/*`, `/api/oauth/*`, `/api/share/*`
-      preview, `/api/connect/authorize/preview`, and the MCP endpoint).
+      always public (the `/api/system/auth/*`, `/api/system/oauth/*`,
+      `/api/agent/share/*` preview, `/api/connect/authorize/preview`, and
+      the MCP endpoint).
+    - Endpoints under `/api/data/*` and `/raw/*` are gated by Connect
+      scopes when called with a Bearer token (`files.read:<path>`,
+      `files.write:<path>`). Owner sessions (cookie or OIDC) bypass the
+      scope check. See [Connect](/docs/internal/api/connect/) for the
+      OAuth 2.1 PKCE flow and per-endpoint scope requirements.
     - Most response bodies are still ad-hoc `gin.H{}` shapes — the
       `RespondData` / `RespondList` envelope (`{ data: ... }`,
       `{ data: [...], pagination: {...} }`) is being adopted incrementally.
@@ -27,43 +39,31 @@ servers:
     description: Local instance
 
 tags:
-  - name: auth
-    description: Password login + session cookie.
-  - name: oauth
-    description: Owner OIDC login flow (used when MLD_AUTH_MODE=oauth).
-  - name: library
-    description: User filesystem operations (tree, rename, move, pin, etc.).
-  - name: upload
-    description: TUS resumable + simple PUT uploads.
-  - name: search
-    description: FTS5 full-text search across the library.
-  - name: notifications
-    description: Server-sent events for live UI updates.
-  - name: settings
-    description: User-level preferences stored in the app DB.
-  - name: stats
-    description: Library statistics.
-  - name: directories
-    description: Top-level directory listing under USER_DATA_DIR.
-  - name: apps
-    description: Apps catalog (importable third-party apps).
-  - name: collectors
-    description: Data-collector configurations.
+  - name: data
+    description: |
+      Files, folders, search, uploads, filesystem events, directories,
+      apps, collectors. Connect-callable with `files.read` / `files.write`
+      scopes.
+  - name: agent
+    description: |
+      Agent (ACP) sessions, groups, attachments, defs, skills, MCP catalog,
+      anonymous session sharing.
+  - name: explore
+    description: Explore feed posts and comments.
   - name: connect
     description: |
-      MyLifeDB Connect — OAuth 2.1 (PKCE) authorization for third-party
-      apps to call /raw with scoped tokens. Includes the well-known
-      discovery doc.
-  - name: agent
-    description: Agent (ACP) sessions, groups, attachments, defs, skills, MCP.
-  - name: explore
-    description: Public/explore feed posts.
-  - name: share
-    description: Anonymous shared agent sessions (no auth).
+      Owner-side OAuth admin (consent, clients, audit). Public OAuth
+      endpoints (`/connect/token`, `/connect/revoke`,
+      `/.well-known/oauth-authorization-server`) live outside `/api/`.
   - name: mcp
     description: Internal MCP JSON-RPC endpoint hosting MyLifeDB tools.
+  - name: system
+    description: |
+      Owner-only control plane — auth, OAuth login, settings, stats.
   - name: raw
-    description: Raw file serving from USER_DATA_DIR with HTTP caching.
+    description: |
+      Raw file serving from USER_DATA_DIR with HTTP caching. Connect-callable
+      with `files.read` / `files.write` scopes.
   - name: sqlar
     description: Files stored inside SQLAR archives in the index DB.
   - name: wellknown
@@ -76,16 +76,20 @@ components:
       in: cookie
       name: session
       description: |
-        Owner session cookie set by `POST /api/auth/login` (password mode)
-        or by the OAuth callback (oauth mode). When `MLD_AUTH_MODE=none`
-        the middleware passes everything through.
+        Owner session cookie set by `POST /api/system/auth/login`
+        (password mode) or by the OAuth callback (oauth mode). When
+        `MLD_AUTH_MODE=none` the middleware passes everything through.
     connectBearer:
       type: http
       scheme: bearer
       description: |
         Connect-issued access token (`grant_type=authorization_code` or
         `refresh_token` from `/connect/token`). Carries scopes
-        (`files.read`, `files.write`). Used on `/raw/*`.
+        (`files.read:<path>`, `files.write:<path>`). Used on `/raw/*`
+        (byte I/O) and the entire `/api/data/*` subtree (JSON metadata,
+        folders, search, uploads, SSE events). Per-endpoint scope
+        requirements are documented at
+        [Connect](/docs/internal/api/connect/).
     oauthBearer:
       type: http
       scheme: bearer
@@ -347,9 +351,9 @@ paths:
   # =============================================================
   # auth — file: backend/api/auth.go
   # =============================================================
-  /api/auth/login:
+  /api/system/auth/login:
     post:
-      tags: [auth]
+      tags: [system]
       summary: Password login (sets session cookie)
       security: []
       requestBody:
@@ -374,9 +378,9 @@ paths:
         '401': { description: Invalid password, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '500': { description: Server error, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
-  /api/auth/logout:
+  /api/system/auth/logout:
     post:
-      tags: [auth]
+      tags: [system]
       summary: Clear the password session cookie
       security: []
       responses:
@@ -387,9 +391,9 @@ paths:
   # =============================================================
   # oauth — file: backend/api/oauth.go
   # =============================================================
-  /api/oauth/authorize:
+  /api/system/oauth/authorize:
     get:
-      tags: [oauth]
+      tags: [system]
       summary: Begin OAuth/OIDC login (302 redirect to IdP)
       security: []
       parameters:
@@ -402,9 +406,9 @@ paths:
         '302': { description: Redirect to upstream authorization endpoint }
         '500': { description: OAuth not configured or state generation failed }
 
-  /api/oauth/callback:
+  /api/system/oauth/callback:
     get:
-      tags: [oauth]
+      tags: [system]
       summary: OIDC callback (302 to /, sets access_token + refresh_token cookies)
       security: []
       parameters:
@@ -414,9 +418,9 @@ paths:
       responses:
         '302': { description: Redirect to / (or to native_redirect with tokens) }
 
-  /api/oauth/refresh:
+  /api/system/oauth/refresh:
     post:
-      tags: [oauth]
+      tags: [system]
       summary: Refresh OIDC tokens using refresh_token cookie or body
       security: []
       requestBody:
@@ -441,9 +445,9 @@ paths:
                   refresh_token: { type: string }
         '401': { description: No or invalid refresh token }
 
-  /api/oauth/token:
+  /api/system/oauth/token:
     get:
-      tags: [oauth]
+      tags: [system]
       summary: Verify access token (cookie or Authorization Bearer)
       security: []
       responses:
@@ -460,56 +464,63 @@ paths:
                   email:    { type: string }
                   error:    { type: string }
 
-  /api/oauth/logout:
+  /api/system/oauth/logout:
     post:
-      tags: [oauth]
+      tags: [system]
       summary: Clear OIDC cookies
       security: []
       responses:
         '200': { content: { application/json: { schema: { $ref: '#/components/schemas/SuccessOK' } } } }
 
   # =============================================================
-  # library — file: backend/api/files.go, backend/api/archive.go
+  # data — files & folders. file: backend/api/data_adapters.go,
+  # backend/api/files.go, backend/api/archive.go
   # =============================================================
-  /api/library/file:
-    delete:
-      tags: [library]
-      summary: Delete a file or folder by path
-      security: [{ sessionCookie: [] }]
-      parameters:
-        - { name: path, in: query, required: true, schema: { type: string } }
-      responses:
-        '200': { content: { application/json: { schema: { $ref: '#/components/schemas/SuccessOK' } } } }
-        '400': { content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
-        '404': { content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
-        '500': { content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
-
-  /api/library/file-info:
+  /api/data/files/{path}:
     get:
-      tags: [library]
+      tags: [data]
       summary: Get indexed metadata for a file
-      security: [{ sessionCookie: [] }]
+      security: [{ sessionCookie: [] }, { connectBearer: ['files.read'] }]
       parameters:
-        - { name: path, in: query, required: true, schema: { type: string } }
+        - { name: path, in: path, required: true, schema: { type: string }, description: "Relative file path (catch-all; may include slashes)" }
       responses:
         '200':
           content: { application/json: { schema: { $ref: '#/components/schemas/FileInfo' } } }
+        '403': { description: Connect token lacks files.read scope for this path }
         '404': { description: File not found }
-
-  /api/library/pin:
-    post:
-      tags: [library]
-      summary: Toggle pin on a file (returns new state)
-      security: [{ sessionCookie: [] }]
+    delete:
+      tags: [data]
+      summary: Delete a file or folder by path
+      security: [{ sessionCookie: [] }, { connectBearer: ['files.write'] }]
+      parameters:
+        - { name: path, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { content: { application/json: { schema: { $ref: '#/components/schemas/SuccessOK' } } } }
+        '400': { content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '403': { description: Connect token lacks files.write scope for this path }
+        '404': { content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '500': { content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+    patch:
+      tags: [data]
+      summary: Rename or move a file or folder
+      description: |
+        Body shape determines the operation:
+        - `{ "name": "new-name.md" }` — rename in place
+        - `{ "parent": "notes/work" }` — move to a new parent directory
+          (requires `files.write` on both the source and the destination
+          when called via Connect)
+      security: [{ sessionCookie: [] }, { connectBearer: ['files.write'] }]
+      parameters:
+        - { name: path, in: path, required: true, schema: { type: string } }
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [path]
               properties:
-                path: { type: string }
+                name:   { type: string, description: "Rename variant" }
+                parent: { type: string, description: "Move variant — destination parent; empty = root" }
       responses:
         '200':
           content:
@@ -517,26 +528,49 @@ paths:
               schema:
                 type: object
                 properties:
-                  isPinned: { type: boolean }
-    delete:
-      tags: [library]
-      summary: Unpin a file
-      security: [{ sessionCookie: [] }]
-      parameters:
-        - { name: path, in: query, required: true, schema: { type: string } }
-      responses:
-        '200': { content: { application/json: { schema: { $ref: '#/components/schemas/SuccessOK' } } } }
+                  newPath: { type: string }
+        '403': { description: Connect token lacks files.write scope for source or destination }
+        '409': { description: A file with this name already exists }
 
-  /api/library/tree:
+  /api/data/folders:
+    post:
+      tags: [data]
+      summary: Create a folder
+      security: [{ sessionCookie: [] }, { connectBearer: ['files.write'] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                parent: { type: string, description: "Parent directory; empty = root" }
+                name:   { type: string }
+      responses:
+        '201':
+          headers:
+            Location: { schema: { type: string }, description: "URL of the created folder" }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  path: { type: string }
+        '403': { description: Connect token lacks files.write scope for the destination path }
+
+  /api/data/tree:
     get:
-      tags: [library]
+      tags: [data]
       summary: List a directory subtree
       description: |
         Returns either a recursive `children` tree (default) or a flat
         `files` array when `query` is provided (server-side substring
         search). Field selection via the `fields` param keeps the
-        response small for the file browser.
-      security: [{ sessionCookie: [] }]
+        response small for the file browser. (Kept as a query-parameter
+        endpoint because gin's `*path` catch-all must be the final URL
+        segment.)
+      security: [{ sessionCookie: [] }, { connectBearer: ['files.read'] }]
       parameters:
         - { name: path,       in: query, schema: { type: string }, description: "Relative or absolute path; default = root" }
         - { name: depth,      in: query, schema: { type: integer, default: 1 }, description: "0 = unlimited" }
@@ -566,22 +600,15 @@ paths:
                         type: { type: string }
                   totalCount: { type: integer }
                   truncated:  { type: boolean }
+        '403': { description: Connect token lacks files.read scope for this path }
 
-  /api/library/rename:
-    post:
-      tags: [library]
-      summary: Rename a file or folder
-      security: [{ sessionCookie: [] }]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [path, newName]
-              properties:
-                path:    { type: string }
-                newName: { type: string }
+  /api/data/pins/{path}:
+    put:
+      tags: [data]
+      summary: Pin a file (idempotent)
+      security: [{ sessionCookie: [] }, { connectBearer: ['files.write'] }]
+      parameters:
+        - { name: path, in: path, required: true, schema: { type: string } }
       responses:
         '200':
           content:
@@ -589,62 +616,24 @@ paths:
               schema:
                 type: object
                 properties:
-                  newPath: { type: string }
-        '409': { description: A file with this name already exists }
-
-  /api/library/move:
-    post:
-      tags: [library]
-      summary: Move a file or folder to a target directory
-      security: [{ sessionCookie: [] }]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [path]
-              properties:
-                path:       { type: string }
-                targetPath: { type: string }
+                  isPinned:  { type: boolean }
+                  pinnedAt:  { type: integer, description: "Unix ms" }
+        '403': { description: Connect token lacks files.write scope for this path }
+    delete:
+      tags: [data]
+      summary: Unpin a file (idempotent)
+      security: [{ sessionCookie: [] }, { connectBearer: ['files.write'] }]
+      parameters:
+        - { name: path, in: path, required: true, schema: { type: string } }
       responses:
-        '200':
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  newPath: { type: string }
+        '204': { description: Unpinned (or was not pinned). }
+        '403': { description: Connect token lacks files.write scope for this path }
 
-  /api/library/folder:
-    post:
-      tags: [library]
-      summary: Create a folder
-      security: [{ sessionCookie: [] }]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [name]
-              properties:
-                path: { type: string, description: "Parent directory; empty = root" }
-                name: { type: string }
-      responses:
-        '200':
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  path: { type: string }
-
-  /api/library/download:
+  /api/data/download:
     get:
-      tags: [library]
+      tags: [data]
       summary: Download a file (attachment) or folder (zip stream)
-      security: [{ sessionCookie: [] }]
+      security: [{ sessionCookie: [] }, { connectBearer: ['files.read'] }]
       parameters:
         - { name: path, in: query, required: true, schema: { type: string } }
       responses:
@@ -653,12 +642,13 @@ paths:
           content:
             application/octet-stream: { schema: { type: string, format: binary } }
             application/zip:          { schema: { type: string, format: binary } }
+        '403': { description: Connect token lacks files.read scope for this path }
 
-  /api/library/root:
+  /api/data/root:
     get:
-      tags: [library]
+      tags: [data]
       summary: Get the configured USER_DATA_DIR root path
-      security: [{ sessionCookie: [] }]
+      security: [{ sessionCookie: [] }, { connectBearer: ['files.read'] }]
       responses:
         '200':
           content:
@@ -668,14 +658,14 @@ paths:
                 properties:
                   root: { type: string }
 
-  /api/library/extract:
+  /api/data/extract:
     post:
-      tags: [library]
+      tags: [data]
       summary: Extract an archive in-place into its parent directory
       description: |
         Supports zip, tar (+ gz/bz2/xz/zst), 7z, rar. Skips macOS resource
         forks and Thumbs.db. Validates against zip-slip.
-      security: [{ sessionCookie: [] }]
+      security: [{ sessionCookie: [] }, { connectBearer: ['files.write'] }]
       requestBody:
         required: true
         content:
@@ -701,13 +691,14 @@ paths:
                       properties:
                         path:   { type: string }
                         status: { type: string, example: created }
+        '403': { description: Connect token lacks files.write scope for the destination }
 
   # =============================================================
   # notifications — file: backend/api/notifications.go
   # =============================================================
-  /api/notifications/stream:
+  /api/data/events:
     get:
-      tags: [notifications]
+      tags: [data]
       summary: SSE event stream
       description: |
         Server-Sent Events stream. Heartbeat comments every 30s.
@@ -724,11 +715,11 @@ paths:
                 description: Stream of JSON-encoded notification events.
 
   # =============================================================
-  # search — file: backend/api/search.go
+  # search — file: backend/api/data/search.go
   # =============================================================
-  /api/search:
+  /api/data/search:
     get:
-      tags: [search]
+      tags: [data]
       summary: Full-text search via SQLite FTS5
       security: [{ sessionCookie: [] }]
       parameters:
@@ -744,17 +735,17 @@ paths:
         '400': { content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   # =============================================================
-  # settings — file: backend/api/settings.go
+  # settings — file: backend/api/system/settings.go
   # =============================================================
-  /api/settings:
+  /api/system/settings:
     get:
-      tags: [settings]
+      tags: [system]
       summary: Get current user settings
       security: [{ sessionCookie: [] }]
       responses:
         '200': { content: { application/json: { schema: { $ref: '#/components/schemas/UserSettings' } } } }
     put:
-      tags: [settings]
+      tags: [system]
       summary: Merge-update user settings
       security: [{ sessionCookie: [] }]
       requestBody:
@@ -765,7 +756,7 @@ paths:
       responses:
         '200': { content: { application/json: { schema: { $ref: '#/components/schemas/UserSettings' } } } }
     post:
-      tags: [settings]
+      tags: [system]
       summary: Reset settings to defaults (body { action - reset })
       security: [{ sessionCookie: [] }]
       requestBody:
@@ -781,11 +772,11 @@ paths:
         '200': { content: { application/json: { schema: { $ref: '#/components/schemas/UserSettings' } } } }
 
   # =============================================================
-  # collectors — file: backend/api/collectors.go
+  # collectors — file: backend/api/data/collectors.go
   # =============================================================
-  /api/collectors:
+  /api/data/collectors:
     get:
-      tags: [collectors]
+      tags: [data]
       summary: List all configured collectors
       security: [{ sessionCookie: [] }]
       responses:
@@ -796,9 +787,9 @@ paths:
                 type: array
                 items: { $ref: '#/components/schemas/Collector' }
 
-  /api/collectors/{id}:
+  /api/data/collectors/{id}:
     put:
-      tags: [collectors]
+      tags: [data]
       summary: Upsert a collector configuration
       security: [{ sessionCookie: [] }]
       parameters:
@@ -816,11 +807,11 @@ paths:
         '200': { content: { application/json: { schema: { $ref: '#/components/schemas/Collector' } } } }
 
   # =============================================================
-  # stats — file: backend/api/stats.go
+  # stats — file: backend/api/system/stats.go
   # =============================================================
-  /api/stats:
+  /api/system/stats:
     get:
-      tags: [stats]
+      tags: [system]
       summary: Library file count + total size
       security: [{ sessionCookie: [] }]
       responses:
@@ -839,9 +830,9 @@ paths:
   # =============================================================
   # upload — file: backend/api/upload.go
   # =============================================================
-  /api/upload/simple/{path}:
+  /api/data/uploads/simple/{path}:
     put:
-      tags: [upload]
+      tags: [data]
       summary: Single-request upload of a small file
       description: |
         Use for small files (~≤1 MiB). The URL path is the destination
@@ -873,9 +864,9 @@ paths:
                         path:   { type: string }
                         status: { type: string, enum: [write, skip] }
 
-  /api/upload/finalize:
+  /api/data/uploads/finalize:
     post:
-      tags: [upload]
+      tags: [data]
       summary: Finalize a batch of TUS uploads
       description: |
         Moves each completed TUS upload from the staging dir into the
@@ -914,36 +905,36 @@ paths:
                   paths:   { type: array, items: { type: string } }
                   results: { type: array, items: { type: object } }
 
-  /api/upload/tus/{path}:
+  /api/data/uploads/tus/{path}:
     parameters:
       - $ref: '#/components/parameters/PathWildcard'
     post:
-      tags: [upload]
+      tags: [data]
       summary: TUS — create resumable upload
       description: "TUS resumable upload protocol. See https://tus.io/protocols/resumable-upload for the full contract."
       security: [{ sessionCookie: [] }]
       responses:
         '201': { description: Upload created; `Location` header holds upload URL }
     head:
-      tags: [upload]
+      tags: [data]
       summary: TUS — query upload offset
       security: [{ sessionCookie: [] }]
       responses:
         '200': { description: Returns Upload-Offset and Upload-Length headers }
     patch:
-      tags: [upload]
+      tags: [data]
       summary: TUS — append chunk at given offset
       security: [{ sessionCookie: [] }]
       responses:
         '204': { description: Chunk accepted; new Upload-Offset returned }
     delete:
-      tags: [upload]
+      tags: [data]
       summary: TUS — abort upload
       security: [{ sessionCookie: [] }]
       responses:
         '204': { description: Upload deleted }
     options:
-      tags: [upload]
+      tags: [data]
       summary: TUS — server capabilities
       security: []
       responses:
@@ -952,9 +943,9 @@ paths:
   # =============================================================
   # directories — file: backend/api/files.go
   # =============================================================
-  /api/directories:
+  /api/data/directories:
     get:
-      tags: [directories]
+      tags: [data]
       summary: List top-level directories under USER_DATA_DIR
       security: [{ sessionCookie: [] }]
       responses:
@@ -966,11 +957,11 @@ paths:
                 items: { type: string }
 
   # =============================================================
-  # apps — file: backend/api/apps.go
+  # apps — file: backend/api/data/apps.go
   # =============================================================
-  /api/apps:
+  /api/data/apps:
     get:
-      tags: [apps]
+      tags: [data]
       summary: List all known apps in the catalog
       security: [{ sessionCookie: [] }]
       responses:
@@ -984,9 +975,9 @@ paths:
                     type: array
                     items: { type: object }
 
-  /api/apps/{id}:
+  /api/data/apps/{id}:
     get:
-      tags: [apps]
+      tags: [data]
       summary: Get one app entry + its doc
       security: [{ sessionCookie: [] }]
       parameters:
@@ -1210,13 +1201,14 @@ paths:
                   code_challenge_methods_supported:      { type: array, items: { type: string } }
                   token_endpoint_auth_methods_supported: { type: array, items: { type: string } }
                   scopes_supported:                      { type: array, items: { type: string } }
+                  service_documentation:                 { type: string, description: "URL of the human-readable Connect protocol reference (RFC 8414)." }
 
   # =============================================================
   # share — file: backend/api/share.go (public)
   # =============================================================
-  /api/share/{token}:
+  /api/agent/share/{token}:
     get:
-      tags: [share]
+      tags: [agent]
       summary: (public) Get shared agent session metadata
       security: []
       parameters:
@@ -1237,9 +1229,9 @@ paths:
                   lastActivity: { type: integer }
         '404': { description: Shared session not found }
 
-  /api/share/{token}/messages:
+  /api/agent/share/{token}/messages:
     get:
-      tags: [share]
+      tags: [agent]
       summary: (public) Get messages for a shared session
       security: []
       parameters:
@@ -1253,9 +1245,9 @@ paths:
                 type: array
                 items: { type: object }
 
-  /api/share/{token}/subscribe:
+  /api/agent/share/{token}/subscribe:
     get:
-      tags: [share]
+      tags: [agent]
       summary: (public) WebSocket subscribe (read-only) to shared session frames
       description: |
         HTTP/1.1 Upgrade to WebSocket. After upgrade, the server replays

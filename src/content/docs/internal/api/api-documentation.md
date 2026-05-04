@@ -2,7 +2,7 @@
 title: "API Documentation"
 ---
 
-> Last edit: 2026-05-02
+> Last edit: 2026-05-04
 
 This document describes the REST API endpoints for the MyLifeDB backend. Mobile app developers should use this as a reference for implementing iOS and Android clients.
 
@@ -161,7 +161,7 @@ All errors include a machine-readable code for programmatic handling:
 
 1. [Authentication](#authentication)
 2. [Inbox](#inbox)
-3. [Library (File Management)](#library-file-management)
+3. [Data — Files & Folders](#data--files--folders-apidata)
 4. [Search](#search)
 5. [Digest (Content Processing)](#digest-content-processing)
 6. [People (Face/Voice Recognition)](#people-facevoice-recognition)
@@ -171,7 +171,7 @@ All errors include a machine-readable code for programmatic handling:
 10. [File Upload (TUS Protocol)](#file-upload-tus-protocol)
 11. [Raw Files](#raw-files)
 12. [SQLAR Files](#sqlar-files)
-13. [Notifications (SSE)](#notifications-sse)
+13. [Filesystem Events (SSE)](#filesystem-events-sse)
 14. [Vendors](#vendors)
 15. [Directories](#directories)
 16. [Speech Recognition (ASR)](#speech-recognition-asr)
@@ -193,7 +193,7 @@ MyLifeDB supports three authentication modes configured via the `MLD_AUTH_MODE` 
 #### Login
 
 ```http
-POST /api/auth/login
+POST /api/system/auth/login
 ```
 
 **Request Body:**
@@ -229,7 +229,7 @@ POST /api/auth/login
 #### Logout
 
 ```http
-POST /api/auth/logout
+POST /api/system/auth/logout
 ```
 
 **Response:** `204 No Content`
@@ -239,7 +239,7 @@ POST /api/auth/logout
 #### Start OAuth Flow
 
 ```http
-GET /api/oauth/authorize
+GET /api/system/oauth/authorize
 ```
 
 **Response:** Redirects to the configured OIDC provider's authorization endpoint.
@@ -247,7 +247,7 @@ GET /api/oauth/authorize
 #### OAuth Callback
 
 ```http
-GET /api/oauth/callback
+GET /api/system/oauth/callback
 ```
 
 **Query Parameters:**
@@ -260,7 +260,7 @@ GET /api/oauth/callback
 #### Check Token Status
 
 ```http
-GET /api/oauth/token
+GET /api/system/oauth/token
 ```
 
 **Response (200 OK - Authenticated):**
@@ -287,7 +287,7 @@ GET /api/oauth/token
 #### Refresh Token
 
 ```http
-POST /api/oauth/refresh
+POST /api/system/oauth/refresh
 ```
 
 **Response (200 OK):**
@@ -312,7 +312,7 @@ POST /api/oauth/refresh
 #### OAuth Logout
 
 ```http
-POST /api/oauth/logout
+POST /api/system/oauth/logout
 ```
 
 **Response:** `204 No Content`
@@ -545,14 +545,16 @@ GET /api/inbox/:filename/status
 
 ---
 
-## Library (File Management)
+## Data — Files & Folders (`/api/data/*`)
 
-### Get Library Tree
+> Every endpoint under `/api/data/*` is gated by Connect scopes when called with a Bearer token. Owner sessions (cookie-authenticated) bypass scope checks. See [Connect](/docs/internal/api/connect/) for the scope shape and per-endpoint requirements.
+
+### Get Folder Tree
 
 Returns a hierarchical tree of files and folders.
 
 ```http
-GET /api/library/tree
+GET /api/data/tree
 ```
 
 **Query Parameters:**
@@ -591,13 +593,13 @@ GET /api/library/tree
 ### Get File Info
 
 ```http
-GET /api/library/files
+GET /api/data/files/*path
 ```
 
-**Query Parameters:**
+**Path Parameters:**
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `path` | string | **Required.** Relative path to file |
+| `*path` | string | **Required.** Relative path to file (e.g. `notes/meeting.md`) |
 
 **Response (200 OK):**
 ```json
@@ -620,26 +622,25 @@ GET /api/library/files
 ### Delete File
 
 ```http
-DELETE /api/library/files
+DELETE /api/data/files/*path
 ```
 
-**Query Parameters:**
+**Path Parameters:**
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `path` | string | **Required.** Relative path to file or folder |
+| `*path` | string | **Required.** Relative path to file or folder |
 
 **Response:** `204 No Content`
 
 ### Rename File
 
 ```http
-PATCH /api/library/files
+PATCH /api/data/files/*path
 ```
 
 **Request Body:**
 ```json
 {
-  "path": "notes/old-name.md",
   "name": "new-name.md"
 }
 ```
@@ -666,13 +667,12 @@ PATCH /api/library/files
 ### Move File
 
 ```http
-PATCH /api/library/files
+PATCH /api/data/files/*path
 ```
 
 **Request Body:**
 ```json
 {
-  "path": "inbox/file.md",
   "parent": "notes/work"
 }
 ```
@@ -691,13 +691,13 @@ PATCH /api/library/files
 ### Create Folder
 
 ```http
-POST /api/library/folders
+POST /api/data/folders
 ```
 
 **Request Body:**
 ```json
 {
-  "path": "notes",
+  "parent": "notes",
   "name": "new-folder"
 }
 ```
@@ -711,20 +711,20 @@ POST /api/library/folders
 }
 ```
 
-**Headers:** `Location: /api/library/folders?path=notes/new-folder`
+**Headers:** `Location: /api/data/folders/notes/new-folder`
 
 ### Pin File
 
 ```http
-PUT /api/library/pins
+PUT /api/data/pins/*path
 ```
 
-**Request Body:**
-```json
-{
-  "path": "inbox/important.md"
-}
-```
+**Path Parameters:**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `*path` | string | **Required.** Relative path to file (e.g. `inbox/important.md`) |
+
+Idempotent — repeat calls return the same `pinnedAt`.
 
 **Response (200 OK):**
 ```json
@@ -740,13 +740,15 @@ PUT /api/library/pins
 ### Unpin File
 
 ```http
-DELETE /api/library/pins
+DELETE /api/data/pins/*path
 ```
 
-**Query Parameters:**
+**Path Parameters:**
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `path` | string | **Required.** Path to file |
+| `*path` | string | **Required.** Relative path to file |
+
+Idempotent — `204` whether or not the file was pinned.
 
 **Response:** `204 No Content`
 
@@ -759,7 +761,7 @@ DELETE /api/library/pins
 Supports keyword search (SQLite FTS5 with the `wangfenjin/simple` tokenizer, via `db.SearchFTS()`) and semantic search (Qdrant/embeddings). The handler in `backend/api/search.go` calls `db.SearchFTS()` directly. The response shape is unchanged — hits include snippets with `<em>...</em>` highlight markup around matching terms.
 
 ```http
-GET /api/search
+GET /api/data/search
 ```
 
 **Query Parameters:**
@@ -1128,7 +1130,7 @@ DELETE /api/people/embeddings/:embeddingId
 ### Get Settings
 
 ```http
-GET /api/settings
+GET /api/system/settings
 ```
 
 **Response (200 OK):**
@@ -1173,7 +1175,7 @@ GET /api/settings
 ### Update Settings
 
 ```http
-PATCH /api/settings
+PATCH /api/system/settings
 ```
 
 **Request Body:** Partial settings object (only include fields to update)
@@ -1196,7 +1198,7 @@ PATCH /api/settings
 ### Reset Settings
 
 ```http
-DELETE /api/settings
+DELETE /api/system/settings
 ```
 
 **Response (200 OK):** Returns the default settings object in `data` field.
@@ -1208,7 +1210,7 @@ DELETE /api/settings
 ### Get Application Stats
 
 ```http
-GET /api/stats
+GET /api/system/stats
 ```
 
 **Response (200 OK):**
@@ -1239,8 +1241,8 @@ MyLifeDB supports two upload strategies. Clients choose based on file size:
 
 | Strategy | Endpoint | Best For |
 |----------|----------|----------|
-| Simple Upload | `PUT /api/upload/simple/*path` | Small files (typically ≤ 1 MB) |
-| TUS Protocol | `POST /api/upload/tus/` + finalize | Large files (resumable, chunked) |
+| Simple Upload | `PUT /api/data/uploads/simple/*path` | Small files (typically ≤ 1 MB) |
+| TUS Protocol | `POST /api/data/uploads/tus/` + finalize | Large files (resumable, chunked) |
 
 ### Duplicate Detection
 
@@ -1284,14 +1286,14 @@ All upload endpoints return a unified response shape:
 Single-request upload for small files, bypassing TUS protocol overhead. The URL path specifies the destination.
 
 ```http
-PUT /api/upload/simple/{destination}/{filename}
+PUT /api/data/uploads/simple/{destination}/{filename}
 ```
 
 **Request:**
 - Body: raw file content
 - `Content-Type` header: MIME type of the file
 
-**Example:** `PUT /api/upload/simple/inbox/photo.jpg`
+**Example:** `PUT /api/data/uploads/simple/inbox/photo.jpg`
 
 **Response (200 OK):**
 ```json
@@ -1312,23 +1314,24 @@ MyLifeDB uses the [TUS protocol](https://tus.io/) for resumable file uploads.
 #### TUS Endpoints
 
 ```http
-POST   /api/upload/tus/       # Create new upload
-HEAD   /api/upload/tus/:id    # Check upload status
-PATCH  /api/upload/tus/:id    # Upload chunk
-DELETE /api/upload/tus/:id    # Cancel upload
-OPTIONS /api/upload/tus/      # CORS preflight
+POST   /api/data/uploads/tus/       # Create new upload
+HEAD   /api/data/uploads/tus/:id    # Check upload status
+PATCH  /api/data/uploads/tus/:id    # Upload chunk
+DELETE /api/data/uploads/tus/:id    # Cancel upload
+OPTIONS /api/data/uploads/tus/      # CORS preflight
 ```
 
 **Configuration:**
 - Max file size: 10GB
-- Base path: `/api/upload/tus/`
+- Base path: `/api/data/uploads/tus/`
+- Connect callers must hold `files.write:<destination>` (checked at finalize time, since the destination is supplied in the finalize body, not on the TUS upload itself)
 
 #### Finalize Upload
 
 After TUS upload completes, finalize to move files to destination. Duplicate detection happens at this step.
 
 ```http
-POST /api/upload/finalize
+POST /api/data/uploads/finalize
 ```
 
 **Request Body:**
@@ -1403,15 +1406,17 @@ GET /sqlar/*path
 
 ---
 
-## Notifications (SSE)
+## Filesystem Events (SSE)
 
-Real-time notifications via Server-Sent Events.
+Real-time filesystem events via Server-Sent Events. (Renamed from `notifications` — these are filesystem mutations, not user-facing notifications.)
 
-### Subscribe to Notifications
+### Subscribe to Events
 
 ```http
-GET /api/notifications/stream
+GET /api/data/events
 ```
+
+Connect callers receive a filtered stream — only events whose `path` is covered by the token's `files.read` scope are delivered. Owner sessions see every event. Path-less events (heartbeats, connection lifecycle) always pass through both channels.
 
 **Headers:**
 ```
@@ -1445,7 +1450,7 @@ data: {"type":"library-changed","path":"notes/file.md","action":"create","timest
 ### List Top-Level Directories
 
 ```http
-GET /api/directories
+GET /api/data/directories
 ```
 
 **Response (200 OK):**
@@ -1775,19 +1780,19 @@ interface UserSettings {
 ## Mobile Implementation Notes
 
 ### Authentication
-1. Check `GET /api/oauth/token` on app launch
+1. Check `GET /api/system/oauth/token` on app launch
 2. Implement OAuth flow using system browser
 3. Store tokens securely in Keychain/EncryptedSharedPreferences
 4. Implement automatic token refresh
 
 ### File Uploads
 1. Use TUS protocol for large files (resumable)
-2. For small files, use `POST /api/inbox` with multipart or `PUT /api/upload/simple/*path`
+2. For small files, use `POST /api/inbox` with multipart or `PUT /api/data/uploads/simple/*path`
 3. Always finalize TUS uploads
 4. Handle duplicate detection: check `results[].status` for `"skipped"` vs `"created"` to show appropriate UI feedback
 
 ### Real-time Updates
-1. Connect to SSE `/api/notifications/stream`
+1. Connect to SSE `/api/data/events`
 2. Handle reconnection with exponential backoff
 3. Use heartbeats to detect connection health
 

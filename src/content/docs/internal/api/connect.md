@@ -2,7 +2,7 @@
 title: "Connect"
 ---
 
-> Last edit: 2026-04-30
+> Last edit: 2026-05-04
 
 **MyLifeDB Connect** is an OAuth 2.1 authorization server that lets your app request scoped access to a user's MyLifeDB instance. This page is the protocol reference — everything you need to build a working integration.
 
@@ -14,7 +14,7 @@ If you're new to Connect as a concept, read the [user-facing overview](/docs/fea
 - **Client type:** Public clients only. There is no client secret. **PKCE is mandatory.**
 - **No registration.** Your app self-declares its `client_id`, name, icon, and redirect URI on the first authorize call. The user's consent is the trust gate.
 - **Scopes are path-keyed:** `files.read:<path>` and `files.write:<path>` over the user's filesystem.
-- **Bearer tokens** are presented to `/raw/*` to read and write files.
+- **Bearer tokens** are presented to `/raw/*` (byte I/O) and the entire `/api/data/*` subtree (JSON file metadata, search, folders, uploads, SSE events) — anywhere a `files.read` or `files.write` scope check applies.
 
 ## Base URL
 
@@ -227,7 +227,9 @@ In practice: never store multiple refresh tokens for the same grant; always over
 
 ## 4. Use the access token
 
-Present the token as a Bearer credential on `/raw/*`:
+Present the token as a Bearer credential on `/raw/*` (byte I/O) **or** any `/api/data/*` endpoint (JSON metadata, folders, search, uploads, events).
+
+### Byte I/O on `/raw/*`
 
 ```http
 GET /raw/journal/2026/04/30.md HTTP/1.1
@@ -247,6 +249,46 @@ For browser embeds (`<img>`, `<audio>`) or WebSocket clients that can't set head
 ```
 GET /raw/photos/2026/sunset.jpg?connect_access_token=<access_token>
 ```
+
+### Metadata + control on `/api/data/*`
+
+The same Bearer token works on the JSON data API. Each endpoint enforces a specific scope based on what it does:
+
+| Endpoint | Required scope |
+|----------|----------------|
+| `GET /api/data/files/*path` | `files.read:<path>` |
+| `DELETE /api/data/files/*path` | `files.write:<path>` |
+| `PATCH /api/data/files/*path` (rename) | `files.write:<path>` |
+| `PATCH /api/data/files/*path` (move, body has `parent`) | `files.write:<path>` (source) **and** `files.write:<parent>` (destination) |
+| `POST /api/data/folders` | `files.write:<parent>/<name>` |
+| `GET /api/data/tree?path=…` | `files.read:<path>` |
+| `PUT /api/data/pins/*path`, `DELETE /api/data/pins/*path` | `files.write:<path>` |
+| `GET /api/data/download?path=…` | `files.read:<path>` |
+| `POST /api/data/extract` | `files.write:<destination>` |
+| `GET /api/data/root`, `GET /api/data/directories` | `files.read:/` |
+| `GET /api/data/search` | `files.read:/` (results are filter-trimmed to the granted subtree) |
+| `PUT /api/data/uploads/simple/*path`, `POST /api/data/uploads/finalize`, `Any /api/data/uploads/tus/*` | `files.write:<destination>` |
+| `GET /api/data/apps`, `GET /api/data/apps/:id`, `GET /api/data/collectors`, `PUT /api/data/collectors/:id` | `files.read:/` (collectors PUT requires `files.write:/`) |
+
+Example — fetch file metadata without downloading bytes:
+
+```http
+GET /api/data/files/journal/2026/04/30.md HTTP/1.1
+Authorization: Bearer <access_token>
+Accept: application/json
+```
+
+### Filesystem events (SSE)
+
+Subscribe to a filtered live stream of filesystem events. The connection stays open while events match your scope; events outside your granted subtree are silently dropped before reaching the client.
+
+```http
+GET /api/data/events HTTP/1.1
+Authorization: Bearer <access_token>
+Accept: text/event-stream
+```
+
+Owner sessions (cookie-authenticated, no Connect token) see every event. Connect callers see only events whose `path` is covered by their `files.read` scope; path-less events (e.g. heartbeats, connection-state events) always pass through.
 
 ### Authorization outcomes
 
@@ -352,7 +394,9 @@ The `/raw/*` endpoint returns MyLifeDB's standard error envelope:
 
 ## Reference: complete client (Python)
 
-A minimal, copy-pasteable end-to-end client. Spawns a loopback HTTP server to capture the redirect, then exchanges and uses the token.
+A full reference client lives in the `my-life-db` repo at [`examples/connect-python/`](https://github.com/xiaoyuanzhu-com/my-life-db/tree/main/examples/connect-python) — it covers discovery, the PKCE flow, token rotation, every `/api/data/*` operation (root, tree, folders, uploads, file metadata, deletion), SSE subscription, and revocation.
+
+The minimal snippet below is a copy-pasteable starting point if you want to handle just the auth handshake yourself.
 
 ```python
 import base64, hashlib, http.server, secrets, threading, urllib.parse, webbrowser
