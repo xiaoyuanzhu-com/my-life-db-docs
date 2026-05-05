@@ -2,7 +2,7 @@
 title: "Authentication"
 ---
 
-> Last edit: 2026-02-26
+> Last edit: 2026-05-05
 
 The auth system supports three modes configured via `MLD_AUTH_MODE` environment variable.
 
@@ -22,7 +22,7 @@ MLD_AUTH_MODE=none|password|oauth
 MLD_OAUTH_CLIENT_ID=your-client-id
 MLD_OAUTH_CLIENT_SECRET=your-secret
 MLD_OAUTH_ISSUER_URL=https://your-idp.com
-MLD_OAUTH_REDIRECT_URI=https://your-app.com/api/oauth/callback
+MLD_OAUTH_REDIRECT_URI=https://your-app.com/api/system/oauth/callback
 
 # Single-user filter (optional) — rejects logins from other usernames
 MLD_EXPECTED_USERNAME=user@domain.com
@@ -36,11 +36,11 @@ OIDC discovery is automatic — the backend fetches `/.well-known/openid-configu
 
 | Route | Method | Purpose |
 |-------|--------|---------|
-| `/api/oauth/authorize` | GET | Start OAuth flow — redirects to IdP |
-| `/api/oauth/callback` | GET | OAuth callback — receives auth code from IdP |
-| `/api/oauth/token` | GET | Validate current token, return user info |
-| `/api/oauth/refresh` | POST | Refresh access token |
-| `/api/oauth/logout` | POST | Clear auth cookies |
+| `/api/system/oauth/authorize` | GET | Start OAuth flow — redirects to IdP |
+| `/api/system/oauth/callback` | GET | OAuth callback — receives auth code from IdP |
+| `/api/system/oauth/token` | GET | Validate current token, return user info |
+| `/api/system/oauth/refresh` | POST | Refresh access token |
+| `/api/system/oauth/logout` | POST | Clear auth cookies |
 
 ### Password
 
@@ -70,12 +70,12 @@ sequenceDiagram
     participant B as Backend
     participant IdP as OIDC Provider
 
-    C->>B: GET /api/oauth/authorize
+    C->>B: GET /api/system/oauth/authorize
     Note over B: generate random state<br/>set oauth_state cookie
     B->>IdP: 302 redirect
     Note over IdP: user authenticates
     IdP->>B: callback with code
-    Note over C: GET /api/oauth/callback<br/>?code=...&state=...
+    Note over C: GET /api/system/oauth/callback<br/>?code=...&state=...
     B->>IdP: exchange code
     IdP->>B: access + refresh token
     Note over B: verify ID token<br/>validate username
@@ -94,7 +94,7 @@ sequenceDiagram
     participant B as Backend
     participant IdP as OIDC Provider
 
-    C->>B: GET /api/oauth/authorize<br/>?native_redirect=myscheme://oauth/callback
+    C->>B: GET /api/system/oauth/authorize<br/>?native_redirect=myscheme://oauth/callback
     Note over B,IdP: ... same IdP flow as above ...
     B->>C: 302 myscheme://oauth/callback<br/>?access_token=...&refresh_token=...&expires_in=...
 ```
@@ -106,15 +106,15 @@ The client receives tokens as URL query parameters, stores them in platform-appr
 | Cookie | Max-Age | Path | Scope |
 |--------|---------|------|-------|
 | `access_token` | Token's expiry (~1h) | `/` | All API calls |
-| `refresh_token` | 30 days | `/api/oauth` | Refresh endpoint only |
-| `oauth_state` | 5 minutes | `/api/oauth` | CSRF validation during login |
+| `refresh_token` | 30 days | `/api/system/oauth` | Refresh endpoint only |
+| `oauth_state` | 5 minutes | `/api/system/oauth` | CSRF validation during login |
 
 All cookies are `HttpOnly`. `Secure` is set in production.
 
 ### Token Validation
 
 ```
-GET /api/oauth/token
+GET /api/system/oauth/token
 Authorization: Bearer <access_token>  (or access_token cookie)
 
 200 { "authenticated": true, "username": "...", "sub": "...", "email": "..." }
@@ -134,7 +134,7 @@ The refresh endpoint accepts the refresh token from **two sources** — each cli
 The backend checks the cookie first, then falls back to the request body:
 
 ```
-POST /api/oauth/refresh
+POST /api/system/oauth/refresh
 
 # Web clients — browser sends cookie automatically
 Cookie: refresh_token=...
@@ -199,7 +199,7 @@ graph TD
         S1 --> S2{"Response?"}
         S2 -- "200" --> S3["Return response"]
         S2 -- "401" --> S4["Attempt refresh once"]
-        S4 --> S5["POST /api/oauth/refresh"]
+        S4 --> S5["POST /api/system/oauth/refresh"]
         S5 -- "succeeds" --> S6["Update stored token\nRetry original request\nReturn retried response"]
         S5 -- "fails" --> S7["Signal 'unauthenticated'\nto app layer"]
     end
@@ -306,7 +306,7 @@ AuthManager (singleton, secure storage)
             ▲
             │ on WebView 401:
             │ bridge delegates refresh back to AuthManager
-            │ (WebView never calls /api/oauth/refresh itself)
+            │ (WebView never calls /api/system/oauth/refresh itself)
 ```
 
 Key principle: **native is the single source of truth for tokens.** The WebView receives tokens as cookies but never refreshes them — on 401, it delegates back to native via the bridge. This eliminates dual-writer race conditions between the native and web refresh paths.
@@ -346,7 +346,7 @@ The WebView needs both `access_token` (for API requests) and `refresh_token` (as
 | Cookie | Value source | Path | Expires |
 |--------|-------------|------|---------|
 | `access_token` | From secure storage | `/` | JWT `exp` claim |
-| `refresh_token` | From secure storage | `/api/oauth` | 30 days from now |
+| `refresh_token` | From secure storage | `/api/system/oauth` | 30 days from now |
 
 #### 2. Always set explicit expiry
 
@@ -401,7 +401,7 @@ Dispatch this event **after** cookie injection, not before. On initial page load
 
 #### 6. WebView delegates refresh to native
 
-When the WebView's web frontend encounters a 401, it must **not** call `/api/oauth/refresh` directly. Instead, it delegates to the native layer via the bridge:
+When the WebView's web frontend encounters a 401, it must **not** call `/api/system/oauth/refresh` directly. Instead, it delegates to the native layer via the bridge:
 
 ```javascript
 // In fetchWithRefresh (web frontend):
@@ -412,14 +412,14 @@ async function refreshAccessToken() {
         return result.success;  // native refreshed + pushed new cookies
     }
     // Standalone browser — refresh via cookie as usual
-    const res = await fetch('/api/oauth/refresh', { method: 'POST', credentials: 'same-origin' });
+    const res = await fetch('/api/system/oauth/refresh', { method: 'POST', credentials: 'same-origin' });
     return res.ok;
 }
 ```
 
 This keeps native as the single token writer. The refresh token cookie injected in [rule 1](#1-inject-both-cookies) exists as an **emergency fallback** — if the bridge call fails or the native process is unresponsive, the web-side `fetchWithRefresh` can still refresh via cookie. But the primary path is always bridge → native → push cookies.
 
-**Never** store the refresh token in JavaScript-accessible storage (localStorage, sessionStorage, JS variables). The injected cookie is scoped to `/api/oauth` path and is only sent to the refresh endpoint.
+**Never** store the refresh token in JavaScript-accessible storage (localStorage, sessionStorage, JS variables). The injected cookie is scoped to `/api/system/oauth` path and is only sent to the refresh endpoint.
 
 ### Lifecycle: foreground resume refresh pushes to WebView
 
@@ -432,7 +432,7 @@ sequenceDiagram
 
     Note over AM: App returns to foreground<br/>token expiring soon (< 2 min)
     AM->>KS: Read refresh_token
-    AM->>BE: POST /api/oauth/refresh<br/>Body: { refresh_token: ... }
+    AM->>BE: POST /api/system/oauth/refresh<br/>Body: { refresh_token: ... }
     Note over AM: Uses dedicated HTTP session<br/>(no cookie storage)
     BE->>AM: 200 { access_token, refresh_token, expiresIn }
     AM->>KS: Save new tokens (verify write succeeded)
@@ -459,7 +459,7 @@ sequenceDiagram
     React->>Bridge: requestTokenRefresh()
     Bridge->>AM: refreshAccessToken()
     AM->>KS: Read refresh_token
-    AM->>BE: POST /api/oauth/refresh<br/>Body: { refresh_token: ... }
+    AM->>BE: POST /api/system/oauth/refresh<br/>Body: { refresh_token: ... }
     BE->>AM: 200 { access_token, refresh_token }
     AM->>KS: Save new tokens
     AM->>React: JS: document.cookie = "access_token=<new>"
@@ -516,7 +516,7 @@ The web frontend runs the same code in browser and WebView. The only behavioral 
 
 | Context | How `fetchWithRefresh` refreshes | Why |
 |---------|--------------------------------|-----|
-| **Standalone browser** | `POST /api/oauth/refresh` with cookies | Browser manages cookies natively |
+| **Standalone browser** | `POST /api/system/oauth/refresh` with cookies | Browser manages cookies natively |
 | **Inside native WebView** | Calls `window.__nativeBridge.requestTokenRefresh()` | Native is the single auth owner |
 
 The detection is a one-line check in the refresh function — `window.__nativeBridge` is set by the native bridge polyfill before React mounts.

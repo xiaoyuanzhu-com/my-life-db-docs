@@ -71,7 +71,7 @@ MLD_AUTH_MODE=none
 # MLD_OAUTH_CLIENT_ID=your-client-id
 # MLD_OAUTH_CLIENT_SECRET=your-client-secret
 # MLD_OAUTH_ISSUER_URL=https://your-oidc-provider/.well-known/openid-configuration
-# MLD_OAUTH_REDIRECT_URI=https://your-domain/api/oauth/callback
+# MLD_OAUTH_REDIRECT_URI=https://your-domain/api/system/oauth/callback
 # MLD_EXPECTED_USERNAME=your-username
 
 # ===== AI (optional) =====
